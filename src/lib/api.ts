@@ -76,3 +76,27 @@ export function registerEmployer(data: EmployerRegistrationData) {
 export function login(email: string, password: string) {
   return request<LoginResponse>("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
 }
+
+export interface InstitutionProfile {
+  id: string;
+  name: string;
+  walletAddress: string | null;
+  isVerified: boolean;
+  [key: string]: unknown;
+}
+
+export interface IssuerStatus {
+  hasWallet: boolean;
+  isIssuer?: boolean;
+}
+
+export function linkInstitutionWallet(walletAddress: string) {
+  return request<InstitutionProfile>("/api/institutions/wallet", {
+    method: "PUT",
+    body: JSON.stringify({ walletAddress }),
+  }, true);
+}
+
+export function getInstitutionIssuerStatus() {
+  return request<IssuerStatus>("/api/institutions/me/issuer-status", { method: "GET" }, true);
+}

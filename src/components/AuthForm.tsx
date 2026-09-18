@@ -17,7 +17,10 @@ export function LoginForm() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setIsSubmitting(true);
     try {
-      const response = await loginRequest(email, password);
+      const formData = new FormData(event.currentTarget);
+      const submittedEmail = String(formData.get("email") ?? "");
+      const submittedPassword = String(formData.get("password") ?? "");
+      const response = await loginRequest(submittedEmail, submittedPassword);
       const data = response.data ?? response;
       const role = (data.user?.role ?? data.role)?.toLowerCase();
       login(response);
