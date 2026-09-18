@@ -23,6 +23,15 @@ export interface LoginResponse {
   accessToken?: string;
   access_token?: string;
   user?: { id?: string; email?: string; role?: string };
+  data?: {
+    token?: string;
+    accessToken?: string;
+    access_token?: string;
+    user?: { id?: string; email?: string; role?: string };
+    id?: string;
+    email?: string;
+    role?: string;
+  };
   id?: string;
   email?: string;
   role?: string;

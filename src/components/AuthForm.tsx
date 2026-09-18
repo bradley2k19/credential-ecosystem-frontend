@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { login as loginRequest } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 
 export function LoginForm() {
   const { login } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -15,10 +17,14 @@ export function LoginForm() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(""); setIsSubmitting(true);
     try {
-      const response = await loginRequest(email, password); login(response);
-      const role = response.user?.role ?? response.role;
+      const response = await loginRequest(email, password);
+      const data = response.data ?? response;
+      const role = (data.user?.role ?? data.role)?.toLowerCase();
+      login(response);
       const destinations = { institution: "/institution/dashboard", student: "/student/dashboard", employer: "/employer/dashboard" } as const;
-      window.location.assign(destinations[role as keyof typeof destinations] ?? "/login");
+      const destination = destinations[role as keyof typeof destinations];
+      if (!destination) throw new Error("Your account role could not be identified.");
+      router.push(destination);
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Invalid credentials");
     } finally { setIsSubmitting(false); }

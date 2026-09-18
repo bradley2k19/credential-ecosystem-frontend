@@ -12,12 +12,17 @@ const TOKEN_KEY = "credential-ecosystem-token";
 const USER_KEY = "credential-ecosystem-user";
 
 function isUserRole(role: unknown): role is UserRole {
-  return role === "institution" || role === "student" || role === "employer";
+  return typeof role === "string" && ["institution", "student", "employer"].includes(role.toLowerCase());
 }
 
 function userFromResponse(response: LoginResponse): AuthUser {
-  const payload = response.user ?? response;
-  return { id: String(payload.id ?? ""), email: String(payload.email ?? ""), role: isUserRole(payload.role) ? payload.role : "student" };
+  const data = response.data ?? response;
+  const payload = data.user ?? data;
+  return {
+    id: String(payload.id ?? ""),
+    email: String(payload.email ?? ""),
+    role: isUserRole(payload.role) ? payload.role.toLowerCase() as UserRole : "student",
+  };
 }
 
 function userFromToken(token: string): AuthUser | null {
@@ -46,7 +51,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   function handleLogin(response: LoginResponse) {
-    const nextToken = response.token ?? response.accessToken;
+    const data = response.data ?? response;
+    const nextToken = data.token ?? data.accessToken ?? data.access_token;
     if (!nextToken) throw new Error("Login succeeded, but no session token was returned.");
     // Production would preferably use httpOnly cookies for stronger XSS protection;
     // that requires backend changes beyond this pass.
