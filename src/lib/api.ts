@@ -121,6 +121,47 @@ export interface StudentListResponse {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
+export interface CreateCertificateData {
+  studentId: string;
+  certificateType: string;
+  programName: string;
+  classification?: string;
+  issueDate: string;
+  graduationDate?: string;
+}
+
+export interface CertificateRecord {
+  id: string;
+  certificateUid: string;
+  studentId: string;
+  certificateType: string;
+  programName: string;
+  classification: string | null;
+  issueDate: string;
+  graduationDate: string | null;
+  certificateHash: string;
+  status: "ACTIVE" | "REVOKED" | string;
+  student: { fullName: string; studentNumber: string };
+}
+
+export interface CertificateListResponse {
+  certificates: CertificateRecord[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export interface BlockchainTransactionRecord {
+  txType: "ISSUE" | "REVOKE" | string;
+  txHash: string;
+  status: "PENDING" | "CONFIRMED" | "FAILED" | string;
+  blockNumber?: number | null;
+}
+
+export interface BlockchainStatusResponse {
+  certificateId: string;
+  certificateUid: string;
+  transactions: BlockchainTransactionRecord[];
+}
+
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -148,4 +189,28 @@ export function createInstitutionStudent(data: CreateStudentData) {
 
 export function getInstitutionStudents() {
   return request<StudentListResponse>("/api/institutions/students", { method: "GET" }, true);
+}
+
+export function createInstitutionCertificate(data: CreateCertificateData) {
+  return request<CertificateRecord>("/api/institutions/certificates", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, true);
+}
+
+export function getInstitutionCertificates() {
+  return request<CertificateListResponse>("/api/institutions/certificates?limit=100", { method: "GET" }, true);
+}
+
+export function recordInstitutionCertificateTransaction(certificateId: string, txHash: string) {
+  return request<BlockchainTransactionRecord>(`/api/institutions/certificates/${encodeURIComponent(certificateId)}/blockchain-record`, {
+    method: "POST",
+    body: JSON.stringify({ txType: "ISSUE", txHash }),
+  }, true);
+}
+
+export function getInstitutionCertificateBlockchainStatus(certificateId: string) {
+  return request<BlockchainStatusResponse>(`/api/institutions/certificates/${encodeURIComponent(certificateId)}/blockchain-status`, {
+    method: "GET",
+  }, true);
 }
