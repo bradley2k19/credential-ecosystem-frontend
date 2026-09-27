@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { getInstitutionIssuerStatus, linkInstitutionWallet, type IssuerStatus } from "@/lib/api";
-import { connectWallet, hasInjectedWallet, WalletError } from "@/lib/wallet";
+import { connectWallet, hasInjectedWallet, subscribeToAccountsChanged, WalletError } from "@/lib/wallet";
 
 const LINKED_WALLET_KEY_PREFIX = "credential-ecosystem-linked-wallet";
 
@@ -44,11 +44,18 @@ export function InstitutionWalletPanel() {
   }
 
   useEffect(() => {
+    const unsubscribe = subscribeToAccountsChanged((address) => {
+      setConnectedAddress(address);
+      setMessage(address ? "MetaMask account changed." : "Wallet disconnected from this site.");
+      setError("");
+    });
+
     // The initial status must be loaded after the client has access to localStorage.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshStatus();
     // refreshStatus intentionally remains stable for this mount-time request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    return unsubscribe;
   }, [linkedWalletKey]);
 
   async function handleConnect() {
@@ -87,7 +94,7 @@ export function InstitutionWalletPanel() {
       <p className="mt-2 text-slate-600">Connect a Polygon Amoy wallet before requesting issuer approval.</p>
     </div>
     {!hasInjectedWallet() ? <p className="rounded-md bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">MetaMask was not detected. <a className="font-semibold underline" href="https://metamask.io/download/" rel="noreferrer" target="_blank">Install MetaMask</a> to connect an institution wallet.</p> : <div className="space-y-4">
-      {connectedAddress ? <p className="rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-700">Connected wallet: <span className="font-semibold">{shortenAddress(connectedAddress)}</span></p> : <button className="button-primary sm:w-auto" disabled={isConnecting} onClick={handleConnect} type="button">{isConnecting ? "Connecting..." : "Connect Wallet"}</button>}
+      {connectedAddress ? <div className="space-y-2"><p className="rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-700">Connected wallet: <span className="font-semibold">{shortenAddress(connectedAddress)}</span></p><p className="text-xs text-slate-500">To use a different wallet, switch accounts directly in MetaMask</p></div> : <button className="button-primary sm:w-auto" disabled={isConnecting} onClick={handleConnect} type="button">{isConnecting ? "Connecting..." : "Connect Wallet"}</button>}
       {connectedAddress && !isLinkedToConnectedWallet && !status?.hasWallet && <button className="button-primary sm:w-auto" disabled={isLinking} onClick={handleLink} type="button">{isLinking ? "Linking wallet..." : "Link this wallet to my account"}</button>}
       {isLinkedToConnectedWallet && <p className="rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-800">Wallet linked: <span className="font-semibold">{shortenAddress(linkedAddress)}</span></p>}
       {status?.hasWallet && !hasKnownLinkedWallet && <p className="rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-600">A wallet is already linked to this account. The current address is not included in the issuer-status response.</p>}

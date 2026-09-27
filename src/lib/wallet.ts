@@ -5,6 +5,8 @@ const AMOY_CHAIN_ID_HEX = "0x13882";
 
 interface EthereumProvider {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>;
+  on(event: "accountsChanged", listener: (accounts: unknown) => void): void;
+  removeListener(event: "accountsChanged", listener: (accounts: unknown) => void): void;
 }
 
 declare global {
@@ -54,6 +56,19 @@ async function ensureAmoyNetwork(provider: EthereumProvider) {
 
 export function hasInjectedWallet() {
   return typeof window !== "undefined" && Boolean(window.ethereum);
+}
+
+export function subscribeToAccountsChanged(listener: (address: string) => void) {
+  if (!hasInjectedWallet()) return () => {};
+
+  const provider = getEthereumProvider();
+  const handleAccountsChanged = (accounts: unknown) => {
+    const address = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : "";
+    listener(address);
+  };
+
+  provider.on("accountsChanged", handleAccountsChanged);
+  return () => provider.removeListener("accountsChanged", handleAccountsChanged);
 }
 
 export async function connectWallet() {
