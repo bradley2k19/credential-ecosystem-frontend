@@ -60,7 +60,7 @@ async function request<T>(path: string, options: RequestInit, requiresAuth = fal
       (body && Array.isArray(body.message) && body.message.join(" ")) ||
       (body && typeof body.error === "string" && body.error) ||
       "Something went wrong. Please try again.";
-    throw new Error(errorMessage);
+    throw new ApiError(errorMessage, response.status);
   }
   return body as T;
 }
@@ -90,6 +90,44 @@ export interface IssuerStatus {
   isIssuer?: boolean;
 }
 
+export interface CreateStudentData {
+  fullName: string;
+  studentNumber: string;
+  dateOfBirth?: string;
+  programName: string;
+  enrollmentYear: number;
+  email: string;
+}
+
+export interface StudentRecord {
+  id: string;
+  fullName: string;
+  studentNumber: string;
+  programName: string;
+  enrollmentYear: number;
+  user: { email: string };
+}
+
+export interface CreateStudentResponse {
+  id: string;
+  fullName: string;
+  studentNumber: string;
+  email: string;
+  temporaryPassword: string;
+}
+
+export interface StudentListResponse {
+  students: StudentRecord[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export function linkInstitutionWallet(walletAddress: string) {
   return request<InstitutionProfile>("/api/institutions/wallet", {
     method: "PUT",
@@ -99,4 +137,15 @@ export function linkInstitutionWallet(walletAddress: string) {
 
 export function getInstitutionIssuerStatus() {
   return request<IssuerStatus>("/api/institutions/me/issuer-status", { method: "GET" }, true);
+}
+
+export function createInstitutionStudent(data: CreateStudentData) {
+  return request<CreateStudentResponse>("/api/institutions/students", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, true);
+}
+
+export function getInstitutionStudents() {
+  return request<StudentListResponse>("/api/institutions/students", { method: "GET" }, true);
 }
