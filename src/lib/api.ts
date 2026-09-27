@@ -38,7 +38,7 @@ export interface LoginResponse {
   [key: string]: unknown;
 }
 
-async function request<T>(path: string, options: RequestInit, requiresAuth = false): Promise<T> {
+async function request<T>(path: string, options: RequestInit, requiresAuth = false, acceptedStatuses: number[] = []): Promise<T> {
   if (!API_URL) throw new Error("The API URL is not configured.");
 
   const headers = new Headers(options.headers);
@@ -54,7 +54,7 @@ async function request<T>(path: string, options: RequestInit, requiresAuth = fal
   });
   const body = await response.json().catch(() => null);
 
-  if (!response.ok) {
+  if (!response.ok && !acceptedStatuses.includes(response.status)) {
     const errorMessage =
       (body && typeof body.message === "string" && body.message) ||
       (body && Array.isArray(body.message) && body.message.join(" ")) ||
@@ -162,6 +162,42 @@ export interface BlockchainStatusResponse {
   transactions: BlockchainTransactionRecord[];
 }
 
+export type VerificationResult = "valid" | "revoked" | "not_found" | "tampered" | "pending-chain";
+
+export interface CertificateVerificationResult {
+  result: VerificationResult;
+  message?: string;
+  certificate?: {
+    certificateUid: string;
+    studentName: string;
+    studentNumber: string;
+    certificateType: string;
+    programName: string;
+    classification: string | null;
+    issueDate: string;
+    institutionName: string;
+  };
+  revokedReason?: string;
+}
+
+export interface EmployerVerificationRecord {
+  id: string;
+  certificateUidQueried: string;
+  method: "QR" | "MANUAL_ID" | string;
+  result: "VALID" | "REVOKED" | "NOT_FOUND" | "TAMPERED" | "PENDING_CHAIN" | string;
+  verifiedAt: string;
+  certificate: {
+    certificateUid: string;
+    certificateType: string;
+    programName: string;
+  } | null;
+}
+
+export interface EmployerVerificationHistoryResponse {
+  verifications: EmployerVerificationRecord[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {
     super(message);
@@ -213,4 +249,18 @@ export function getInstitutionCertificateBlockchainStatus(certificateId: string)
   return request<BlockchainStatusResponse>(`/api/institutions/certificates/${encodeURIComponent(certificateId)}/blockchain-status`, {
     method: "GET",
   }, true);
+}
+
+export function verifyCertificate(certificateUid: string) {
+  return request<CertificateVerificationResult>(
+    `/api/verify/${encodeURIComponent(certificateUid)}?method=manual_id`,
+    { method: "GET" },
+    true,
+    [404],
+  );
+}
+
+export function getEmployerVerificationHistory(page = 1, limit = 20) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return request<EmployerVerificationHistoryResponse>(`/api/employers/verifications?${query}`, { method: "GET" }, true);
 }
