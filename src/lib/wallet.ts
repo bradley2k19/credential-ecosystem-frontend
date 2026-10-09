@@ -1,4 +1,4 @@
-import { BrowserProvider, type JsonRpcSigner } from "ethers";
+import { BrowserProvider, getAddress, type JsonRpcSigner } from "ethers";
 
 const AMOY_CHAIN_ID = 80002;
 const AMOY_CHAIN_ID_HEX = "0x13882";
@@ -54,6 +54,20 @@ async function ensureAmoyNetwork(provider: EthereumProvider) {
   }
 }
 
+/** Compares addresses after checksum normalisation, so letter case never causes a false mismatch. */
+export function isSameAddress(a: string | null | undefined, b: string | null | undefined) {
+  if (!a || !b) return false;
+  try {
+    return getAddress(a) === getAddress(b);
+  } catch {
+    return false;
+  }
+}
+
+export function shortenAddress(address: string) {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 export function hasInjectedWallet() {
   return typeof window !== "undefined" && Boolean(window.ethereum);
 }
@@ -85,7 +99,7 @@ export function getBrowserProvider() {
 }
 
 export async function getWalletSigner(): Promise<JsonRpcSigner> {
-  const provider = getBrowserProvider();
+  // Switch network before creating the ethers provider; a provider created on another chain throws "network changed".
   await ensureAmoyNetwork(getEthereumProvider());
-  return provider.getSigner();
+  return getBrowserProvider().getSigner();
 }

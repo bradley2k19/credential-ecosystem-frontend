@@ -1,26 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
   createInstitutionCertificate,
   getInstitutionCertificateBlockchainStatus,
   getInstitutionCertificates,
   getInstitutionIssuerStatus,
   getInstitutionStudents,
-  recordInstitutionCertificateTransaction,
+  revokeInstitutionCertificate,
+  type BlockchainTxType,
   type CertificateRecord,
   type IssuerStatus,
+  type OnChainTransactionSummary,
   type StudentRecord,
 } from "@/lib/api";
-import { getCertificateRegistryContract } from "@/lib/contract";
-import { getWalletSigner } from "@/lib/wallet";
+import {
+  describeOnChainFailure,
+  errorMessage,
+  EXPLORER_TX_URL,
+  getLinkedWalletSigner,
+  isWalletRejection,
+  onChainPhaseMessages,
+  submitOnChainStep,
+  type OnChainOutcome,
+  type OnChainPhase,
+} from "@/lib/onChain";
 
-const POLL_INTERVAL_MS = 3500;
-const MAX_STATUS_CHECKS = 20;
-const EXPLORER_TX_URL = "https://amoy.polygonscan.com/tx/";
-
-type IssuanceState = "idle" | "creating" | "wallet" | "recording" | "confirming" | "confirmed" | "failed" | "cancelled" | "timed-out";
+type IssuanceState = "idle" | "creating" | OnChainPhase | "confirmed" | "failed" | "cancelled" | "timed-out";
+type RowActionPhase = "form" | "revoking" | OnChainPhase | "confirmed" | "failed" | "cancelled" | "timed-out" | "stopped";
+type ChainState = "confirmed" | "pending" | "failed" | "missing";
 
 interface CertificateForm {
   studentId: string;
@@ -31,30 +40,54 @@ interface CertificateForm {
   graduationDate: string;
 }
 
-function errorCode(error: unknown) {
-  if (typeof error === "object" && error !== null && "code" in error) return error.code;
-  return undefined;
+interface RowAction {
+  certificateId: string;
+  kind: "revoke" | "retry";
+  phase: RowActionPhase;
+  reason: string;
+  reasonError: string;
+  message: string;
+  error: string;
+  transactionHash: string;
 }
 
-function errorMessage(error: unknown) {
-  if (typeof error === "object" && error !== null && "shortMessage" in error && typeof error.shortMessage === "string") {
-    return error.shortMessage;
-  }
-  return error instanceof Error ? error.message : "An unexpected error occurred.";
-}
+const busyPhases: string[] = ["creating", "revoking", "wallet-check", "wallet", "recording", "confirming"];
 
-function isWalletRejection(error: unknown) {
-  const code = errorCode(error);
-  const message = errorMessage(error).toLowerCase();
-  return code === 4001 || code === "ACTION_REJECTED" || message.includes("user rejected") || message.includes("user denied");
-}
+const ISSUE_INCOMPLETE_NOTE = "The certificate is saved in the database, but its on-chain record is incomplete. Use “Retry on-chain step” in the list to finish it.";
+const REVOKE_INCOMPLETE_NOTE = "The certificate is already revoked in the database, so verifiers will see it as revoked. Only the on-chain record is incomplete. Use “Retry on-chain step” in the list to finish it.";
 
 function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value));
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(value));
 }
 
 function emptyCertificateForm(): CertificateForm {
   return { studentId: "", certificateType: "", programName: "", classification: "", issueDate: "", graduationDate: "" };
+}
+
+function chainState(transaction: OnChainTransactionSummary | null | undefined): ChainState {
+  if (!transaction) return "missing";
+  if (transaction.status === "CONFIRMED") return "confirmed";
+  if (transaction.status === "FAILED") return "failed";
+  return "pending";
+}
+
+/** The on-chain step that matters for a certificate: issuance until it's confirmed, then revocation once revoked. */
+function currentChainStep(certificate: CertificateRecord): { txType: BlockchainTxType; state: ChainState; txHash?: string } {
+  const issue = certificate.onChain?.issue;
+  if (chainState(issue) !== "confirmed" || certificate.status !== "REVOKED") {
+    return { txType: "ISSUE", state: chainState(issue), txHash: issue?.txHash };
+  }
+  const revoke = certificate.onChain?.revoke;
+  return { txType: "REVOKE", state: chainState(revoke), txHash: revoke?.txHash };
+}
+
+function outcomeText(outcome: OnChainOutcome, txType: BlockchainTxType) {
+  const incompleteNote = txType === "ISSUE" ? ISSUE_INCOMPLETE_NOTE : REVOKE_INCOMPLETE_NOTE;
+  if (outcome === "confirmed") {
+    return { message: txType === "ISSUE" ? "Certificate issued and confirmed on Polygon Amoy." : "Revocation confirmed on Polygon Amoy.", error: "" };
+  }
+  if (outcome === "failed") return { message: "", error: `The blockchain transaction failed. ${incompleteNote}` };
+  return { message: "", error: `The transaction is still pending after several checks. Use “Check status” in the list later. ${txType === "REVOKE" ? "The certificate is already revoked in the database." : "The certificate is saved in the database."}` };
 }
 
 export function InstitutionCertificates() {
@@ -71,6 +104,11 @@ export function InstitutionCertificates() {
   const [issuanceError, setIssuanceError] = useState("");
   const [createdCertificate, setCreatedCertificate] = useState<CertificateRecord | null>(null);
   const [transactionHash, setTransactionHash] = useState("");
+  const [rowAction, setRowAction] = useState<RowAction | null>(null);
+  const [checkingStatusId, setCheckingStatusId] = useState("");
+
+  const linkedWallet = issuerStatus?.walletAddress;
+  const isBusy = busyPhases.includes(issuanceState) || (rowAction !== null && busyPhases.includes(rowAction.phase));
 
   async function refreshCertificates() {
     setListError("");
@@ -118,18 +156,30 @@ export function InstitutionCertificates() {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
+  function updateRowAction(changes: Partial<RowAction>) {
+    setRowAction((current) => (current ? { ...current, ...changes } : current));
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setIssuanceState("creating");
-    setIssuanceMessage("Saving certificate details...");
+    setIssuanceState("wallet-check");
+    setIssuanceMessage(onChainPhaseMessages["wallet-check"]);
     setIssuanceError("");
     setCreatedCertificate(null);
     setTransactionHash("");
 
     let savedCertificate: CertificateRecord | null = null;
+    let walletChecked = false;
+    let submittedHash = "";
 
     try {
-      savedCertificate = await createInstitutionCertificate({
+      // Check the wallet before saving so a wrong account never leaves a certificate without an on-chain record.
+      const signer = await getLinkedWalletSigner(linkedWallet);
+      walletChecked = true;
+
+      setIssuanceState("creating");
+      setIssuanceMessage("Saving certificate details...");
+      const certificate = await createInstitutionCertificate({
         studentId: form.studentId,
         certificateType: form.certificateType.trim(),
         programName: form.programName.trim(),
@@ -137,73 +187,112 @@ export function InstitutionCertificates() {
         issueDate: form.issueDate,
         graduationDate: form.graduationDate || undefined,
       });
-      setCreatedCertificate(savedCertificate);
-      setCertificates((current) => [savedCertificate!, ...current.filter((item) => item.id !== savedCertificate!.id)]);
+      savedCertificate = certificate;
+      setCreatedCertificate(certificate);
+      setCertificates((current) => [certificate, ...current.filter((item) => item.id !== certificate.id)]);
       setForm(emptyCertificateForm());
 
-      setIssuanceState("wallet");
-      setIssuanceMessage("Waiting for wallet confirmation...");
-      const signer = await getWalletSigner();
-      const contract = getCertificateRegistryContract(signer);
-      const transaction = await contract.issueCertificate(savedCertificate.certificateUid, savedCertificate.certificateHash);
-      setTransactionHash(transaction.hash);
-
-      setIssuanceState("recording");
-      setIssuanceMessage("Transaction submitted. Recording it with the institution account...");
-      await recordInstitutionCertificateTransaction(savedCertificate.id, transaction.hash);
-
-      setIssuanceState("confirming");
-      setIssuanceMessage("Transaction recorded. Waiting for blockchain confirmation...");
-      for (let attempt = 0; attempt < MAX_STATUS_CHECKS; attempt += 1) {
-        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-        const statusResponse = await getInstitutionCertificateBlockchainStatus(savedCertificate.id);
-        const transactionStatus = statusResponse.transactions.find(
-          (item) => item.txHash.toLowerCase() === transaction.hash.toLowerCase() && item.txType === "ISSUE",
-        )?.status;
-
-        if (transactionStatus === "CONFIRMED") {
-          setIssuanceState("confirmed");
-          setIssuanceMessage("Certificate issued and confirmed on Polygon Amoy.");
-          await refreshCertificates();
-          return;
-        }
-        if (transactionStatus === "FAILED") {
-          setIssuanceState("failed");
-          setIssuanceMessage("");
-          setIssuanceError("The blockchain transaction failed. The certificate still exists in the database; the on-chain step can potentially be retried.");
-          await refreshCertificates();
-          return;
-        }
-      }
-
-      setIssuanceState("timed-out");
-      setIssuanceError("The transaction is still pending after several checks. The certificate is saved in the database; check again later.");
-      await refreshCertificates();
+      const outcome = await submitOnChainStep({
+        certificate,
+        txType: "ISSUE",
+        signer,
+        onPhase: (phase) => { setIssuanceState(phase); setIssuanceMessage(onChainPhaseMessages[phase]); },
+        onTransactionHash: (hash) => { submittedHash = hash; setTransactionHash(hash); },
+      });
+      const { message, error } = outcomeText(outcome, "ISSUE");
+      setIssuanceState(outcome);
+      setIssuanceMessage(message);
+      setIssuanceError(error);
     } catch (error) {
+      setIssuanceState(isWalletRejection(error) ? "cancelled" : "failed");
       setIssuanceMessage("");
-      if (savedCertificate) {
-        setCreatedCertificate(savedCertificate);
-        await refreshCertificates();
-      }
-
-      if (isWalletRejection(error)) {
-        setIssuanceState("cancelled");
-        setIssuanceError(savedCertificate
-          ? "Transaction cancelled. The certificate was still created in the database, but the on-chain step was not completed. Its details remain available in this page session for a later retry."
-          : "Wallet request cancelled before a certificate was created.");
-      } else {
-        setIssuanceState("failed");
-        const message = errorMessage(error);
-        setIssuanceError(savedCertificate
-          ? transactionHash
-            ? `The transaction was submitted, but blockchain tracking failed: ${message}. The certificate remains saved in the database.`
-            : `The certificate was created in the database, but the blockchain step failed: ${message}`
-          : message);
-      }
+      if (savedCertificate) setIssuanceError(`${describeOnChainFailure(error, submittedHash)} ${ISSUE_INCOMPLETE_NOTE}`);
+      else if (walletChecked) setIssuanceError(errorMessage(error));
+      else setIssuanceError(`${describeOnChainFailure(error, "")} No certificate was created.`);
+    } finally {
+      if (savedCertificate) await refreshCertificates();
     }
   }
 
-  const isProcessing = ["creating", "wallet", "recording", "confirming"].includes(issuanceState);
+  async function runOnChainStep(certificate: CertificateRecord, txType: BlockchainTxType) {
+    let submittedHash = "";
+    try {
+      updateRowAction({ phase: "wallet-check", message: onChainPhaseMessages["wallet-check"], error: "" });
+      const signer = await getLinkedWalletSigner(linkedWallet);
+      const outcome = await submitOnChainStep({
+        certificate,
+        txType,
+        signer,
+        onPhase: (phase) => updateRowAction({ phase, message: onChainPhaseMessages[phase] }),
+        onTransactionHash: (hash) => { submittedHash = hash; updateRowAction({ transactionHash: hash }); },
+      });
+      updateRowAction({ phase: outcome, ...outcomeText(outcome, txType) });
+    } catch (error) {
+      updateRowAction({
+        phase: isWalletRejection(error) ? "cancelled" : "failed",
+        message: "",
+        error: `${describeOnChainFailure(error, submittedHash)} ${txType === "ISSUE" ? ISSUE_INCOMPLETE_NOTE : REVOKE_INCOMPLETE_NOTE}`,
+      });
+    } finally {
+      await refreshCertificates();
+    }
+  }
+
+  function openRowAction(certificateId: string, kind: RowAction["kind"]) {
+    setRowAction({ certificateId, kind, phase: "form", reason: "", reasonError: "", message: "", error: "", transactionHash: "" });
+  }
+
+  async function handleRevoke(event: FormEvent<HTMLFormElement>, certificate: CertificateRecord) {
+    event.preventDefault();
+    const reason = rowAction?.reason.trim() ?? "";
+    if (!reason) {
+      updateRowAction({ reasonError: "Enter a reason for revoking this certificate." });
+      return;
+    }
+
+    updateRowAction({ phase: "revoking", reasonError: "", message: "Revoking the certificate in the database...", error: "" });
+    let revoked: CertificateRecord;
+    try {
+      revoked = await revokeInstitutionCertificate(certificate.id, reason);
+    } catch (error) {
+      updateRowAction({ phase: "failed", message: "", error: `The certificate could not be revoked: ${errorMessage(error)}. Nothing was changed.` });
+      return;
+    }
+
+    const updated = { ...certificate, ...revoked, onChain: certificate.onChain };
+    setCertificates((current) => current.map((item) => (item.id === certificate.id ? updated : item)));
+
+    // The contract reverts when revoking a certificate it has never recorded, so don't send a transaction that can't succeed.
+    if (chainState(certificate.onChain?.issue) !== "confirmed") {
+      updateRowAction({
+        phase: "stopped",
+        message: "",
+        error: "The certificate is revoked in the database. Its issuance is not confirmed on-chain, so there is no on-chain record to revoke yet. Once the issuance is confirmed (use “Check status” if it is pending, or “Retry on-chain step” if it is missing or failed), use “Retry on-chain step” again to record the revocation.",
+      });
+      await refreshCertificates();
+      return;
+    }
+
+    await runOnChainStep(updated, "REVOKE");
+  }
+
+  async function handleRetry(certificate: CertificateRecord) {
+    openRowAction(certificate.id, "retry");
+    await runOnChainStep(certificate, currentChainStep(certificate).txType);
+  }
+
+  async function handleCheckStatus(certificate: CertificateRecord) {
+    setCheckingStatusId(certificate.id);
+    try {
+      // The status endpoint refreshes pending transactions from the chain; the list then reflects the result.
+      await getInstitutionCertificateBlockchainStatus(certificate.id);
+      await refreshCertificates();
+    } catch (error) {
+      setListError(errorMessage(error));
+    } finally {
+      setCheckingStatusId("");
+    }
+  }
 
   if (isCheckingApproval) {
     return <p className="rounded-md bg-slate-50 p-5 text-sm text-slate-600">Checking issuer approval...</p>;
@@ -248,23 +337,26 @@ export function InstitutionCertificates() {
             <FormField label="Classification (optional)" name="classification" value={form.classification} onChange={updateForm} required={false} />
             <FormField label="Issue date" name="issueDate" type="date" value={form.issueDate} onChange={updateForm} />
             <FormField label="Graduation date (optional)" name="graduationDate" type="date" value={form.graduationDate} onChange={updateForm} required={false} />
-            <button className="button-primary sm:col-span-2" disabled={isProcessing} type="submit">
-              {isProcessing ? "Issuing certificate..." : "Create and issue certificate"}
+            <button className="button-primary sm:col-span-2" disabled={isBusy} type="submit">
+              {busyPhases.includes(issuanceState) ? "Issuing certificate..." : "Create and issue certificate"}
             </button>
           </form>
         )}
 
-        {issuanceMessage && <p className={`mt-5 rounded-md px-4 py-3 text-sm ${issuanceState === "confirmed" ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-900"}`} role="status">{issuanceMessage}</p>}
-        {issuanceError && <p className="mt-5 rounded-md bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="alert">{issuanceError}{createdCertificate && <span className="mt-1 block">Saved certificate ID: <span className="font-mono">{createdCertificate.certificateUid}</span></span>}</p>}
-        {transactionHash && <p className="mt-3 break-all text-sm text-slate-600">Transaction: <a className="font-semibold text-teal-700 underline" href={`${EXPLORER_TX_URL}${transactionHash}`} rel="noreferrer" target="_blank">{transactionHash}</a></p>}
-        {issuanceState === "confirmed" && transactionHash && <p className="mt-2 text-sm"><a className="font-semibold text-teal-700 underline" href={`${EXPLORER_TX_URL}${transactionHash}`} rel="noreferrer" target="_blank">View transaction on PolygonScan</a></p>}
+        <OnChainProgress
+          error={issuanceError}
+          extra={createdCertificate && issuanceError ? <span className="mt-1 block">Saved certificate ID: <span className="font-mono">{createdCertificate.certificateUid}</span></span> : null}
+          isConfirmed={issuanceState === "confirmed"}
+          message={issuanceMessage}
+          transactionHash={transactionHash}
+        />
       </section>
 
       <section>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">Issued certificates</h2>
-            <p className="mt-1 text-sm text-slate-600">Database status is shown here; blockchain status is checked during issuance.</p>
+            <p className="mt-1 text-sm text-slate-600">Database status and the on-chain record for each certificate.</p>
           </div>
           <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => void refreshCertificates()} type="button">Refresh list</button>
         </div>
@@ -274,23 +366,154 @@ export function InstitutionCertificates() {
         ) : (
           <div className="mt-4 overflow-x-auto rounded-md border border-slate-200">
             <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-600"><tr><th className="px-4 py-3 font-semibold">Student</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Program</th><th className="px-4 py-3 font-semibold">Issue date</th><th className="px-4 py-3 font-semibold">Status</th></tr></thead>
+              <thead className="bg-slate-50 text-xs uppercase text-slate-600"><tr><th className="px-4 py-3 font-semibold">Student</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Program</th><th className="px-4 py-3 font-semibold">Issue date</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold">On-chain</th><th className="px-4 py-3 font-semibold"><span className="sr-only">Actions</span></th></tr></thead>
               <tbody className="divide-y divide-slate-200 bg-white">
-                {certificates.map((certificate) => (
-                  <tr key={certificate.id}>
-                    <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{certificate.student.fullName}<span className="block text-xs font-normal text-slate-500">{certificate.student.studentNumber}</span></td>
-                    <td className="px-4 py-3 text-slate-700">{certificate.certificateType}</td>
-                    <td className="px-4 py-3 text-slate-700">{certificate.programName}</td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDate(certificate.issueDate)}</td>
-                    <td className="whitespace-nowrap px-4 py-3"><span className={certificate.status === "ACTIVE" ? "font-semibold text-emerald-700" : "font-semibold text-slate-600"}>{certificate.status === "ACTIVE" ? "Active" : "Revoked"}</span></td>
-                  </tr>
-                ))}
+                {certificates.map((certificate) => {
+                  const step = currentChainStep(certificate);
+                  const action = rowAction?.certificateId === certificate.id ? rowAction : null;
+                  return (
+                    <CertificateRows
+                      action={action}
+                      certificate={certificate}
+                      isBusy={isBusy}
+                      isCheckingStatus={checkingStatusId === certificate.id}
+                      key={certificate.id}
+                      onCheckStatus={() => void handleCheckStatus(certificate)}
+                      onClose={() => setRowAction(null)}
+                      onReasonChange={(reason) => updateRowAction({ reason, reasonError: "" })}
+                      onRetry={() => void handleRetry(certificate)}
+                      onRevokeOpen={() => openRowAction(certificate.id, "revoke")}
+                      onRevokeSubmit={(event) => void handleRevoke(event, certificate)}
+                      step={step}
+                    />
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </section>
     </div>
+  );
+}
+
+const chainStateClasses: Record<ChainState, string> = {
+  confirmed: "bg-emerald-100 text-emerald-800",
+  pending: "bg-sky-100 text-sky-900",
+  failed: "bg-red-100 text-red-800",
+  missing: "bg-amber-100 text-amber-900",
+};
+
+function CertificateRows({
+  certificate,
+  step,
+  action,
+  isBusy,
+  isCheckingStatus,
+  onRevokeOpen,
+  onRevokeSubmit,
+  onReasonChange,
+  onRetry,
+  onCheckStatus,
+  onClose,
+}: {
+  certificate: CertificateRecord;
+  step: ReturnType<typeof currentChainStep>;
+  action: RowAction | null;
+  isBusy: boolean;
+  isCheckingStatus: boolean;
+  onRevokeOpen: () => void;
+  onRevokeSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onReasonChange: (reason: string) => void;
+  onRetry: () => void;
+  onCheckStatus: () => void;
+  onClose: () => void;
+}) {
+  const stepLabel = step.txType === "ISSUE" ? "Issuance" : "Revocation";
+  const actionInProgress = action !== null && busyPhases.includes(action.phase);
+  const reasonErrorId = `revoke-reason-error-${certificate.id}`;
+
+  return (
+    <>
+      <tr>
+        <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{certificate.student.fullName}<span className="block text-xs font-normal text-slate-500">{certificate.student.studentNumber}</span></td>
+        <td className="px-4 py-3 text-slate-700">{certificate.certificateType}</td>
+        <td className="px-4 py-3 text-slate-700">{certificate.programName}</td>
+        <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDate(certificate.issueDate)}</td>
+        <td className="whitespace-nowrap px-4 py-3"><span className={certificate.status === "ACTIVE" ? "font-semibold text-emerald-700" : "font-semibold text-slate-600"}>{certificate.status === "ACTIVE" ? "Active" : "Revoked"}</span></td>
+        <td className="whitespace-nowrap px-4 py-3">
+          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${chainStateClasses[step.state]}`}>{stepLabel} {step.state}</span>
+          {step.txHash && <a className="ml-2 text-xs font-semibold text-teal-700 underline" href={`${EXPLORER_TX_URL}${step.txHash}`} rel="noreferrer" target="_blank">Tx</a>}
+        </td>
+        <td className="whitespace-nowrap px-4 py-3 text-right">
+          <div className="flex justify-end gap-2">
+            {(step.state === "missing" || step.state === "failed") && (
+              <button className="rounded-md border border-teal-600 px-3 py-1.5 text-xs font-semibold text-teal-800 hover:bg-teal-50 disabled:opacity-50" disabled={isBusy} onClick={onRetry} type="button">Retry on-chain step</button>
+            )}
+            {step.state === "pending" && (
+              <button className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" disabled={isCheckingStatus} onClick={onCheckStatus} type="button">{isCheckingStatus ? "Checking..." : "Check status"}</button>
+            )}
+            {certificate.status === "ACTIVE" && (
+              <button className="rounded-md border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50" disabled={isBusy} onClick={onRevokeOpen} type="button">Revoke</button>
+            )}
+          </div>
+        </td>
+      </tr>
+      {action && (
+        <tr className="bg-slate-50">
+          <td className="px-4 py-4" colSpan={7}>
+            {action.kind === "revoke" && action.phase === "form" ? (
+              <form className="max-w-2xl space-y-3" noValidate onSubmit={onRevokeSubmit}>
+                <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm leading-6 text-red-900">
+                  <p className="font-semibold">Revoke this certificate for {certificate.student.fullName}?</p>
+                  <p>Revocation is permanent and cannot be undone. Every employer or verifier who checks this certificate will see it as revoked, together with the reason you give below.</p>
+                </div>
+                <label className="block text-sm font-medium text-slate-700" htmlFor={`revoke-reason-${certificate.id}`}>
+                  Reason for revocation
+                  <textarea
+                    aria-describedby={action.reasonError ? reasonErrorId : undefined}
+                    aria-invalid={action.reasonError ? true : undefined}
+                    className={`field min-h-20 ${action.reasonError ? "border-red-500" : ""}`}
+                    id={`revoke-reason-${certificate.id}`}
+                    onChange={(event) => onReasonChange(event.target.value)}
+                    required
+                    value={action.reason}
+                  />
+                </label>
+                {action.reasonError && <p className="text-sm text-red-700" id={reasonErrorId} role="alert">{action.reasonError}</p>}
+                <div className="flex gap-2">
+                  <button className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800" type="submit">Revoke certificate</button>
+                  <button className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white" onClick={onClose} type="button">Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <div className="max-w-2xl">
+                <p className="text-sm font-semibold text-slate-900">{action.kind === "revoke" ? "Revoking certificate" : "Retrying on-chain step"}</p>
+                <OnChainProgress error={action.error} isConfirmed={action.phase === "confirmed"} message={action.message} transactionHash={action.transactionHash} />
+                {!actionInProgress && (
+                  <button className="mt-3 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white" onClick={onClose} type="button">Close</button>
+                )}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function OnChainProgress({ message, error, transactionHash, isConfirmed, extra }: { message: string; error: string; transactionHash: string; isConfirmed: boolean; extra?: ReactNode }) {
+  return (
+    <>
+      {message && <p className={`mt-4 rounded-md px-4 py-3 text-sm ${isConfirmed ? "bg-emerald-50 text-emerald-800" : "bg-sky-50 text-sky-900"}`} role="status">{message}</p>}
+      {error && <p className="mt-4 rounded-md bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950" role="alert">{error}{extra}</p>}
+      {transactionHash && (
+        <p className="mt-3 break-all text-sm text-slate-600">
+          {isConfirmed ? "View transaction on PolygonScan: " : "Transaction: "}
+          <a className="font-semibold text-teal-700 underline" href={`${EXPLORER_TX_URL}${transactionHash}`} rel="noreferrer" target="_blank">{transactionHash}</a>
+        </p>
+      )}
+    </>
   );
 }
 
