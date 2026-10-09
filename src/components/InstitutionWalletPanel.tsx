@@ -1,15 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useAuth } from "@/context/AuthContext";
 import { getInstitutionIssuerStatus, linkInstitutionWallet, type IssuerStatus } from "@/lib/api";
-import { connectWallet, hasInjectedWallet, subscribeToAccountsChanged, WalletError } from "@/lib/wallet";
-
-const LINKED_WALLET_KEY_PREFIX = "credential-ecosystem-linked-wallet";
-
-function shortenAddress(address: string) {
-  return `${address.slice(0, 6)}...${address.slice(-5)}`;
-}
+import { connectWallet, hasInjectedWallet, isSameAddress, shortenAddress, subscribeToAccountsChanged, WalletError } from "@/lib/wallet";
 
 function userMessage(error: unknown) {
   if (error instanceof WalletError) return error.message;
@@ -18,10 +11,7 @@ function userMessage(error: unknown) {
 }
 
 export function InstitutionWalletPanel() {
-  const { user } = useAuth();
-  const linkedWalletKey = `${LINKED_WALLET_KEY_PREFIX}-${user?.id ?? "unknown"}`;
   const [connectedAddress, setConnectedAddress] = useState("");
-  const [linkedAddress, setLinkedAddress] = useState("");
   const [status, setStatus] = useState<IssuerStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -32,10 +22,7 @@ export function InstitutionWalletPanel() {
   async function refreshStatus() {
     setError("");
     try {
-      const nextStatus = await getInstitutionIssuerStatus();
-      setStatus(nextStatus);
-      const storedWallet = window.localStorage.getItem(linkedWalletKey) ?? "";
-      setLinkedAddress(storedWallet);
+      setStatus(await getInstitutionIssuerStatus());
     } catch (statusError) {
       setError(userMessage(statusError));
     } finally {
@@ -50,13 +37,10 @@ export function InstitutionWalletPanel() {
       setError("");
     });
 
-    // The initial status must be loaded after the client has access to localStorage.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshStatus();
-    // refreshStatus intentionally remains stable for this mount-time request.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     return unsubscribe;
-  }, [linkedWalletKey]);
+  }, []);
 
   async function handleConnect() {
     setError(""); setMessage(""); setIsConnecting(true);
@@ -73,10 +57,7 @@ export function InstitutionWalletPanel() {
     if (!connectedAddress) return;
     setError(""); setMessage(""); setIsLinking(true);
     try {
-      const profile = await linkInstitutionWallet(connectedAddress);
-      const address = profile.walletAddress ?? connectedAddress;
-      window.localStorage.setItem(linkedWalletKey, address);
-      setLinkedAddress(address);
+      await linkInstitutionWallet(connectedAddress);
       setMessage("Wallet linked to your institution account successfully.");
       await refreshStatus();
     } catch (linkError) {
@@ -84,8 +65,8 @@ export function InstitutionWalletPanel() {
     } finally { setIsLinking(false); }
   }
 
-  const isLinkedToConnectedWallet = Boolean(linkedAddress && connectedAddress && linkedAddress.toLowerCase() === connectedAddress.toLowerCase());
-  const hasKnownLinkedWallet = Boolean(linkedAddress);
+  const linkedAddress = status?.walletAddress ?? "";
+  const isLinkedToConnectedWallet = isSameAddress(linkedAddress, connectedAddress);
 
   return <section className="mt-8 space-y-6 border-t border-slate-200 pt-8">
     <div>
@@ -95,9 +76,9 @@ export function InstitutionWalletPanel() {
     </div>
     {!hasInjectedWallet() ? <p className="rounded-md bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">MetaMask was not detected. <a className="font-semibold underline" href="https://metamask.io/download/" rel="noreferrer" target="_blank">Install MetaMask</a> to connect an institution wallet.</p> : <div className="space-y-4">
       {connectedAddress ? <div className="space-y-2"><p className="rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-700">Connected wallet: <span className="font-semibold">{shortenAddress(connectedAddress)}</span></p><p className="text-xs text-slate-500">To use a different wallet, switch accounts directly in MetaMask</p></div> : <button className="button-primary sm:w-auto" disabled={isConnecting} onClick={handleConnect} type="button">{isConnecting ? "Connecting..." : "Connect Wallet"}</button>}
-      {connectedAddress && !isLinkedToConnectedWallet && !status?.hasWallet && <button className="button-primary sm:w-auto" disabled={isLinking} onClick={handleLink} type="button">{isLinking ? "Linking wallet..." : "Link this wallet to my account"}</button>}
-      {isLinkedToConnectedWallet && <p className="rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-800">Wallet linked: <span className="font-semibold">{shortenAddress(linkedAddress)}</span></p>}
-      {status?.hasWallet && !hasKnownLinkedWallet && <p className="rounded-md bg-slate-50 px-4 py-3 text-sm text-slate-600">A wallet is already linked to this account. The current address is not included in the issuer-status response.</p>}
+      {connectedAddress && !linkedAddress && <button className="button-primary sm:w-auto" disabled={isLinking} onClick={handleLink} type="button">{isLinking ? "Linking wallet..." : "Link this wallet to my account"}</button>}
+      {linkedAddress && <p className="rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-800">Wallet linked: <span className="font-semibold">{shortenAddress(linkedAddress)}</span></p>}
+      {linkedAddress && connectedAddress && !isLinkedToConnectedWallet && <p className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-900">The connected MetaMask account is not your linked wallet (Linked: <span className="font-semibold">{shortenAddress(linkedAddress)}</span>, connected: <span className="font-semibold">{shortenAddress(connectedAddress)}</span>). Switch to the linked account in MetaMask before issuing or revoking.</p>}
     </div>}
     {message && <p className="rounded-md bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</p>}
     {error && <p className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}

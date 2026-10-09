@@ -88,6 +88,8 @@ export interface InstitutionProfile {
 export interface IssuerStatus {
   hasWallet: boolean;
   isIssuer?: boolean;
+  // Checksummed linked wallet, or null when none is linked. The single source of truth for the linked address.
+  walletAddress?: string | null;
 }
 
 export interface CreateStudentData {
@@ -141,7 +143,18 @@ export interface CertificateRecord {
   graduationDate: string | null;
   certificateHash: string;
   status: "ACTIVE" | "REVOKED" | string;
+  revokedReason?: string | null;
   student: { fullName: string; studentNumber: string };
+  // Only included by the list endpoint: the confirmed (or latest) transaction of each type.
+  onChain?: { issue: OnChainTransactionSummary | null; revoke: OnChainTransactionSummary | null };
+}
+
+export type BlockchainTxType = "ISSUE" | "REVOKE";
+
+export interface OnChainTransactionSummary {
+  txHash: string;
+  status: "PENDING" | "CONFIRMED" | "FAILED" | string;
+  submittedAt: string;
 }
 
 export interface CertificateListResponse {
@@ -238,10 +251,17 @@ export function getInstitutionCertificates() {
   return request<CertificateListResponse>("/api/institutions/certificates?limit=100", { method: "GET" }, true);
 }
 
-export function recordInstitutionCertificateTransaction(certificateId: string, txHash: string) {
+export function revokeInstitutionCertificate(certificateId: string, revokedReason: string) {
+  return request<CertificateRecord>(`/api/institutions/certificates/${encodeURIComponent(certificateId)}/revoke`, {
+    method: "PATCH",
+    body: JSON.stringify({ revokedReason }),
+  }, true);
+}
+
+export function recordInstitutionCertificateTransaction(certificateId: string, txType: BlockchainTxType, txHash: string) {
   return request<BlockchainTransactionRecord>(`/api/institutions/certificates/${encodeURIComponent(certificateId)}/blockchain-record`, {
     method: "POST",
-    body: JSON.stringify({ txType: "ISSUE", txHash }),
+    body: JSON.stringify({ txType, txHash }),
   }, true);
 }
 
