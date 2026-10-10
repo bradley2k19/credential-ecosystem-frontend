@@ -271,13 +271,95 @@ export function getInstitutionCertificateBlockchainStatus(certificateId: string)
   }, true);
 }
 
-export function verifyCertificate(certificateUid: string) {
+/** The stored token, only when the stored session belongs to an employer. Never throws. */
+function getStoredEmployerToken() {
+  if (typeof window === "undefined") return null;
+  try {
+    const user = JSON.parse(window.localStorage.getItem("credential-ecosystem-user") ?? "null") as { role?: string } | null;
+    return user?.role === "employer" ? window.localStorage.getItem("credential-ecosystem-token") : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Public verification. It needs no login: an employer's token is attached only so the check is
+ * attributed to them, and any other (or missing) session sends no token at all.
+ */
+export function verifyCertificate(certificateUid: string, method: "qr" | "manual_id" = "manual_id") {
+  const token = getStoredEmployerToken();
   return request<CertificateVerificationResult>(
-    `/api/verify/${encodeURIComponent(certificateUid)}?method=manual_id`,
-    { method: "GET" },
-    true,
+    `/api/verify/${encodeURIComponent(certificateUid)}?method=${method}`,
+    { method: "GET", headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+    false,
     [404],
   );
+}
+
+export interface StudentProfile {
+  fullName: string;
+  studentNumber: string;
+  programName: string;
+  enrollmentYear: number;
+  email: string;
+  institutionName: string;
+}
+
+export interface StudentCertificate {
+  id: string;
+  certificateUid: string;
+  certificateType: string;
+  programName: string;
+  classification: string | null;
+  issueDate: string;
+  graduationDate: string | null;
+  status: "ACTIVE" | "REVOKED" | string;
+  revokedReason?: string | null;
+  institutionName: string;
+  onChain: { issue: OnChainTransactionSummary | null; revoke: OnChainTransactionSummary | null };
+}
+
+export interface StudentCertificateListResponse {
+  certificates: StudentCertificate[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export interface StudentVerificationRecord {
+  id: string;
+  method: "QR" | "MANUAL_ID" | string;
+  result: "VALID" | "REVOKED" | "TAMPERED" | "PENDING_CHAIN" | string;
+  verifiedAt: string;
+  certificate: { certificateUid: string; certificateType: string } | null;
+  verifiedBy: string;
+}
+
+export interface StudentVerificationHistoryResponse {
+  verifications: StudentVerificationRecord[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export function getStudentProfile() {
+  return request<StudentProfile>("/api/students/me", { method: "GET" }, true);
+}
+
+export function getStudentCertificates() {
+  return request<StudentCertificateListResponse>("/api/students/me/certificates?limit=100", { method: "GET" }, true);
+}
+
+export function getStudentCertificate(certificateId: string) {
+  return request<StudentCertificate>(`/api/students/me/certificates/${encodeURIComponent(certificateId)}`, { method: "GET" }, true);
+}
+
+export function getStudentVerificationHistory(page = 1, limit = 20) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  return request<StudentVerificationHistoryResponse>(`/api/students/me/verifications?${query}`, { method: "GET" }, true);
+}
+
+export function changePassword(currentPassword: string, newPassword: string) {
+  return request<{ message: string }>("/api/auth/change-password", {
+    method: "PATCH",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  }, true);
 }
 
 export function getEmployerVerificationHistory(page = 1, limit = 20) {

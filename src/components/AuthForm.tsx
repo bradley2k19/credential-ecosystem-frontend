@@ -41,6 +41,7 @@ export function LoginForm() {
       <button className="button-primary" disabled={isSubmitting} type="submit">{isSubmitting ? "Signing in..." : "Sign in"}</button>
     </form>
     <p className="mt-6 text-center text-sm text-slate-600">Need an account? <Link className="font-semibold text-teal-700 hover:text-teal-900" href="/register/institution">Register an institution</Link> or <Link className="font-semibold text-teal-700 hover:text-teal-900" href="/register/employer">employer</Link>.</p>
+    <p className="mt-3 text-center text-sm text-slate-600"><Link className="font-semibold text-teal-700 hover:text-teal-900" href="/verify">Verify a certificate</Link></p>
   </AuthShell>;
 }
 
