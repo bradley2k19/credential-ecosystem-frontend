@@ -5,7 +5,7 @@ import {
   type BlockchainTxType,
   type CertificateRecord,
 } from "@/lib/api";
-import { getCertificateRegistryContract } from "@/lib/contract";
+import { getCertificateRegistryContract, getFeeOverrides } from "@/lib/contract";
 import { getWalletSigner, isSameAddress, shortenAddress, WalletError } from "@/lib/wallet";
 
 const POLL_INTERVAL_MS = 3500;
@@ -51,10 +51,24 @@ export function isWalletRejection(error: unknown) {
   return code === 4001 || code === "ACTION_REJECTED" || message.includes("user rejected") || message.includes("user denied");
 }
 
+/** True when the RPC node refused the transaction because its fee was under the network minimum. */
+function isFeeRejection(error: unknown) {
+  // The RPC text can sit in the message or in nested wallet/RPC error objects, so search all of it.
+  let details = "";
+  try {
+    details = JSON.stringify(error) ?? "";
+  } catch {
+    // Circular error objects fall back to the message alone.
+  }
+  const text = `${errorMessage(error)} ${error instanceof Error ? error.message : ""} ${details}`.toLowerCase();
+  return text.includes("gas price below minimum") || text.includes("gas tip cap");
+}
+
 /** Explains why an on-chain step stopped. Callers append what state the database is in. */
 export function describeOnChainFailure(error: unknown, transactionHash: string) {
   if (isWalletRejection(error)) return "The wallet request was cancelled, so no transaction was sent.";
   if (error instanceof WalletMismatchError || error instanceof WalletError) return error.message;
+  if (isFeeRejection(error)) return "The network rejected the transaction fee. Please retry.";
   if (transactionHash) return `The transaction was submitted, but tracking it failed: ${errorMessage(error)}.`;
   return `The blockchain step could not be completed: ${errorMessage(error)}.`;
 }
@@ -98,9 +112,10 @@ export async function submitOnChainStep({
 
   onPhase("wallet");
   // Always use the stored UID and hash; never recompute them in the browser.
+  const feeOverrides = await getFeeOverrides(signer.provider);
   const transaction = txType === "ISSUE"
-    ? await contract.issueCertificate(certificate.certificateUid, certificate.certificateHash)
-    : await contract.revokeCertificate(certificate.certificateUid);
+    ? await contract.issueCertificate(certificate.certificateUid, certificate.certificateHash, feeOverrides)
+    : await contract.revokeCertificate(certificate.certificateUid, feeOverrides);
   onTransactionHash(transaction.hash);
 
   onPhase("recording");
