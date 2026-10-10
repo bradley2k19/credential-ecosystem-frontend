@@ -2,28 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { getEmployerVerificationHistory, type EmployerVerificationRecord } from "@/lib/api";
+import {
+  formatDateTime as formatDate,
+  verificationResultClasses as resultClasses,
+  verificationResultLabels as resultLabels,
+} from "@/lib/verification";
 
 const PAGE_SIZE = 20;
-
-const resultLabels: Record<string, string> = {
-  VALID: "Valid",
-  REVOKED: "Revoked",
-  NOT_FOUND: "Not found",
-  TAMPERED: "Tampered",
-  PENDING_CHAIN: "Pending chain",
-};
-
-const resultClasses: Record<string, string> = {
-  VALID: "bg-emerald-100 text-emerald-800",
-  REVOKED: "bg-amber-100 text-amber-900",
-  NOT_FOUND: "bg-slate-100 text-slate-700",
-  TAMPERED: "bg-red-100 text-red-900",
-  PENDING_CHAIN: "bg-sky-100 text-sky-900",
-};
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
-}
 
 export function EmployerVerificationHistory() {
   const [records, setRecords] = useState<EmployerVerificationRecord[]>([]);
