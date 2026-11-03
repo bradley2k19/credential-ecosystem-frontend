@@ -9,6 +9,8 @@ const navigation = [
   { label: "Overview", href: "/institution/dashboard" },
   { label: "Students", href: "/institution/students" },
   { label: "Certificates", href: "/institution/certificates" },
+  { label: "Verification activity", href: "/institution/verifications" },
+  { label: "Reports", href: "/institution/reports" },
 ];
 
 export default function InstitutionLayout({ children }: { children: ReactNode }) {

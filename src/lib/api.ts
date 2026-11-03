@@ -362,6 +362,84 @@ export function changePassword(currentPassword: string, newPassword: string) {
   }, true);
 }
 
+export interface InstitutionVerificationRecord {
+  id: string;
+  verifiedAt: string;
+  result: "VALID" | "REVOKED" | "TAMPERED" | "PENDING_CHAIN" | string;
+  method: "QR" | "MANUAL_ID" | string;
+  certificate: { certificateUid: string; certificateType: string; programName: string } | null;
+  student: { fullName: string; studentNumber: string } | null;
+  verifiedBy: string;
+}
+
+export interface InstitutionVerificationListResponse {
+  verifications: InstitutionVerificationRecord[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+/** Dates are YYYY-MM-DD from a date input, interpreted as whole days in the browser's time zone. */
+export interface InstitutionVerificationFilters {
+  result?: string;
+  from?: string;
+  to?: string;
+}
+
+export function getInstitutionVerifications(page = 1, limit = 20, filters: InstitutionVerificationFilters = {}) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (filters.result) query.set("result", filters.result);
+  // Verification times are timestamps, so send local day boundaries rather than UTC dates.
+  if (filters.from) query.set("from", new Date(`${filters.from}T00:00:00`).toISOString());
+  if (filters.to) query.set("to", new Date(`${filters.to}T23:59:59.999`).toISOString());
+  return request<InstitutionVerificationListResponse>(`/api/institutions/verifications?${query}`, { method: "GET" }, true);
+}
+
+export interface InstitutionReportSummary {
+  certificates: {
+    total: number;
+    active: number;
+    revoked: number;
+    issueConfirmed: number;
+    issuePending: number;
+    issueMissingOrFailed: number;
+  };
+  verifications: {
+    total: number;
+    last30Days: number;
+    byResult: Record<"VALID" | "REVOKED" | "TAMPERED" | "PENDING_CHAIN", number>;
+  };
+}
+
+export function getInstitutionReportSummary() {
+  return request<InstitutionReportSummary>("/api/institutions/reports/summary", { method: "GET" }, true);
+}
+
+/** Issue dates are stored as UTC calendar dates, so YYYY-MM-DD values are sent unchanged. */
+export interface CertificateExportFilters {
+  status?: "ACTIVE" | "REVOKED" | "";
+  from?: string;
+  to?: string;
+}
+
+/** Fetches the CSV export with the stored token. The endpoint needs the Authorization header, so a plain link can't be used. */
+export async function downloadInstitutionCertificatesCsv(filters: CertificateExportFilters = {}) {
+  if (!API_URL) throw new Error("The API URL is not configured.");
+
+  const query = new URLSearchParams();
+  if (filters.status) query.set("status", filters.status);
+  if (filters.from) query.set("from", filters.from);
+  if (filters.to) query.set("to", filters.to);
+
+  const token = typeof window !== "undefined" ? window.localStorage.getItem("credential-ecosystem-token") : null;
+  const response = await fetch(`${API_URL}/api/institutions/reports/certificates.csv?${query}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError((body && typeof body.error === "string" && body.error) || "The export could not be downloaded. Please try again.", response.status);
+  }
+  return response.blob();
+}
+
 export function getEmployerVerificationHistory(page = 1, limit = 20) {
   const query = new URLSearchParams({ page: String(page), limit: String(limit) });
   return request<EmployerVerificationHistoryResponse>(`/api/employers/verifications?${query}`, { method: "GET" }, true);
