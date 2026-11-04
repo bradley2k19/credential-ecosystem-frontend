@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { LoginResponse } from "@/lib/api";
 
-export type UserRole = "institution" | "student" | "employer";
+export type UserRole = "institution" | "student" | "employer" | "admin";
 export interface AuthUser { id: string; email: string; role: UserRole }
 interface AuthContextValue { user: AuthUser | null; token: string | null; isLoading: boolean; login: (response: LoginResponse) => void; logout: () => void }
 
@@ -12,7 +12,7 @@ const TOKEN_KEY = "credential-ecosystem-token";
 const USER_KEY = "credential-ecosystem-user";
 
 function isUserRole(role: unknown): role is UserRole {
-  return typeof role === "string" && ["institution", "student", "employer"].includes(role.toLowerCase());
+  return typeof role === "string" && ["institution", "student", "employer", "admin"].includes(role.toLowerCase());
 }
 
 function userFromResponse(response: LoginResponse): AuthUser {

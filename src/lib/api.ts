@@ -444,3 +444,91 @@ export function getEmployerVerificationHistory(page = 1, limit = 20) {
   const query = new URLSearchParams({ page: String(page), limit: String(limit) });
   return request<EmployerVerificationHistoryResponse>(`/api/employers/verifications?${query}`, { method: "GET" }, true);
 }
+
+export interface AdminOverview {
+  institutions: { total: number; verified: number; awaitingVerification: number };
+  students: { total: number };
+  certificates: { total: number; active: number; revoked: number };
+  verifications: { total: number };
+}
+
+export interface AdminInstitution {
+  id: string;
+  name: string;
+  registrationNumber: string;
+  contactEmail: string | null;
+  isVerified: boolean;
+  walletAddress: string | null;
+  createdAt: string;
+  certificatesIssued: number;
+  // Live on-chain role; null when there is no wallet or the chain could not be read.
+  isIssuer: boolean | null;
+}
+
+export interface AdminInstitutionListResponse {
+  institutions: AdminInstitution[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export interface AdminInstitutionFilters {
+  verified?: "true" | "false" | "";
+  search?: string;
+}
+
+/** A confirmed role change, or one submitted but not mined within the backend's wait (HTTP 202). */
+export interface AdminRoleChangeResponse {
+  institutionId: string;
+  walletAddress: string;
+  transactionHash: string;
+  status: "CONFIRMED" | "PENDING";
+  blockNumber?: number | null;
+  message?: string;
+}
+
+export type AdminAuditAction = "INSTITUTION_VERIFIED" | "INSTITUTION_UNVERIFIED" | "ISSUER_GRANTED" | "ISSUER_REVOKED";
+
+export interface AdminAuditLog {
+  id: string;
+  createdAt: string;
+  adminEmail: string | null;
+  action: AdminAuditAction | string;
+  institution: { id: string | null; name: string | null };
+  details: { transactionHash?: string | null; outcome?: string; failure?: string; [key: string]: unknown };
+}
+
+export interface AdminAuditLogListResponse {
+  auditLogs: AdminAuditLog[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export function getAdminOverview() {
+  return request<AdminOverview>("/api/admin/overview", { method: "GET" }, true);
+}
+
+export function getAdminInstitutions(page = 1, limit = 20, filters: AdminInstitutionFilters = {}) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (filters.verified) query.set("verified", filters.verified);
+  if (filters.search?.trim()) query.set("search", filters.search.trim());
+  return request<AdminInstitutionListResponse>(`/api/admin/institutions?${query}`, { method: "GET" }, true);
+}
+
+export function setAdminInstitutionVerification(institutionId: string, isVerified: boolean) {
+  return request<AdminInstitution>(`/api/admin/institutions/${encodeURIComponent(institutionId)}/verification`, {
+    method: "PATCH",
+    body: JSON.stringify({ isVerified }),
+  }, true);
+}
+
+export function grantAdminInstitutionIssuer(institutionId: string) {
+  return request<AdminRoleChangeResponse>(`/api/admin/institutions/${encodeURIComponent(institutionId)}/grant-issuer`, { method: "POST" }, true);
+}
+
+export function revokeAdminInstitutionIssuer(institutionId: string) {
+  return request<AdminRoleChangeResponse>(`/api/admin/institutions/${encodeURIComponent(institutionId)}/revoke-issuer`, { method: "POST" }, true);
+}
+
+export function getAdminAuditLogs(page = 1, limit = 20, action = "") {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (action) query.set("action", action);
+  return request<AdminAuditLogListResponse>(`/api/admin/audit-logs?${query}`, { method: "GET" }, true);
+}

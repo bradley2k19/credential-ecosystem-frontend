@@ -24,7 +24,7 @@ export function LoginForm() {
       const data = response.data ?? response;
       const role = (data.user?.role ?? data.role)?.toLowerCase();
       login(response);
-      const destinations = { institution: "/institution/dashboard", student: "/student/dashboard", employer: "/employer/dashboard" } as const;
+      const destinations = { institution: "/institution/dashboard", student: "/student/dashboard", employer: "/employer/dashboard", admin: "/admin/dashboard" } as const;
       const destination = destinations[role as keyof typeof destinations];
       if (!destination) throw new Error("Your account role could not be identified.");
       router.push(destination);
