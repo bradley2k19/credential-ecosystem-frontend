@@ -9,6 +9,7 @@ import {
   type AdminInstitution,
   type AdminInstitutionFilters,
 } from "@/lib/api";
+import { AssetImage } from "@/components/AssetImage";
 import { EXPLORER_TX_URL } from "@/lib/onChain";
 import { shortenAddress } from "@/lib/wallet";
 
@@ -209,8 +210,14 @@ function InstitutionRow({ institution, onAction }: { institution: AdminInstituti
   return (
     <tr className="align-top">
       <td className="px-4 py-3 font-medium text-slate-900">
-        {institution.name}
-        {institution.contactEmail && <span className="block break-all text-xs font-normal text-slate-500">{institution.contactEmail}</span>}
+        <div className="flex items-start gap-2">
+          {/* Decorative: the name sits right next to it. */}
+          {institution.logoUrl && <AssetImage alt="" className="mt-0.5 h-6 w-6 shrink-0 object-contain" path={institution.logoUrl} />}
+          <div className="min-w-0">
+            {institution.name}
+            {institution.contactEmail && <span className="block break-all text-xs font-normal text-slate-500">{institution.contactEmail}</span>}
+          </div>
+        </div>
       </td>
       <td className="whitespace-nowrap px-4 py-3 text-slate-700">{institution.registrationNumber}</td>
       <td className="whitespace-nowrap px-4 py-3">

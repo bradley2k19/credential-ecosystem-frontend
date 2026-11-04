@@ -459,6 +459,7 @@ export interface AdminInstitution {
   contactEmail: string | null;
   isVerified: boolean;
   walletAddress: string | null;
+  logoUrl: string | null;
   createdAt: string;
   certificatesIssued: number;
   // Live on-chain role; null when there is no wallet or the chain could not be read.
@@ -525,6 +526,102 @@ export function grantAdminInstitutionIssuer(institutionId: string) {
 
 export function revokeAdminInstitutionIssuer(institutionId: string) {
   return request<AdminRoleChangeResponse>(`/api/admin/institutions/${encodeURIComponent(institutionId)}/revoke-issuer`, { method: "POST" }, true);
+}
+
+/** Absolute URL for an image path returned by the API (e.g. /api/assets/<id>), or null. */
+export function apiAssetUrl(path: string | null | undefined) {
+  if (!path || !API_URL) return null;
+  return `${API_URL}${path}`;
+}
+
+/** An image ready to upload: base64 without the data: prefix. */
+export interface ImageUpload {
+  data: string;
+  mimeType: "image/png" | "image/jpeg";
+}
+
+export interface InstitutionProfileDetails {
+  name: string;
+  registrationNumber: string;
+  address: string | null;
+  contactEmail: string | null;
+  brandColor: string | null;
+  walletAddress: string | null;
+  isVerified: boolean;
+  logoUrl: string | null;
+  sealUrl: string | null;
+  signatoryCount: number;
+}
+
+export interface InstitutionProfileUpdate {
+  address?: string | null;
+  contactEmail?: string | null;
+  brandColor?: string | null;
+}
+
+export interface Signatory {
+  id: string;
+  name: string;
+  title: string;
+  signatureUrl: string | null;
+  displayOrder: number;
+}
+
+export interface CreateSignatoryData {
+  name: string;
+  title: string;
+  signature?: ImageUpload;
+  confirmAuthorised?: boolean;
+}
+
+export function getInstitutionProfile() {
+  return request<InstitutionProfileDetails>("/api/institutions/me/profile", { method: "GET" }, true);
+}
+
+export function updateInstitutionProfile(data: InstitutionProfileUpdate) {
+  return request<InstitutionProfileDetails>("/api/institutions/me/profile", { method: "PATCH", body: JSON.stringify(data) }, true);
+}
+
+export function setInstitutionBrandImage(kind: "logo" | "seal", image: ImageUpload) {
+  return request<InstitutionProfileDetails>(`/api/institutions/me/${kind}`, { method: "PUT", body: JSON.stringify(image) }, true);
+}
+
+/** Only unlinks the image; the stored asset is kept. */
+export function removeInstitutionBrandImage(kind: "logo" | "seal") {
+  return request<InstitutionProfileDetails>(`/api/institutions/me/${kind}`, { method: "DELETE" }, true);
+}
+
+export function getSignatories() {
+  return request<{ signatories: Signatory[] }>("/api/institutions/me/signatories", { method: "GET" }, true);
+}
+
+export function createSignatory(data: CreateSignatoryData) {
+  return request<Signatory>("/api/institutions/me/signatories", { method: "POST", body: JSON.stringify(data) }, true);
+}
+
+export function updateSignatory(signatoryId: string, data: { name?: string; title?: string; displayOrder?: number }) {
+  return request<Signatory>(`/api/institutions/me/signatories/${encodeURIComponent(signatoryId)}`, { method: "PATCH", body: JSON.stringify(data) }, true);
+}
+
+/** `ids` must list every active signatory exactly once, in the new order. */
+export function reorderSignatories(ids: string[]) {
+  return request<{ signatories: Signatory[] }>("/api/institutions/me/signatories/order", { method: "PATCH", body: JSON.stringify({ ids }) }, true);
+}
+
+export function setSignatorySignature(signatoryId: string, image: ImageUpload, confirmAuthorised: boolean) {
+  return request<Signatory>(`/api/institutions/me/signatories/${encodeURIComponent(signatoryId)}/signature`, {
+    method: "PUT",
+    body: JSON.stringify({ ...image, confirmAuthorised }),
+  }, true);
+}
+
+export function removeSignatorySignature(signatoryId: string) {
+  return request<Signatory>(`/api/institutions/me/signatories/${encodeURIComponent(signatoryId)}/signature`, { method: "DELETE" }, true);
+}
+
+/** Archives the signatory; it is never deleted. */
+export function archiveSignatory(signatoryId: string) {
+  return request<{ message: string }>(`/api/institutions/me/signatories/${encodeURIComponent(signatoryId)}`, { method: "DELETE" }, true);
 }
 
 export function getAdminAuditLogs(page = 1, limit = 20, action = "") {

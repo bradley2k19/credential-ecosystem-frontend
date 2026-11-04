@@ -3,10 +3,13 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
+import { AssetImage } from "@/components/AssetImage";
 import { useAuth } from "@/context/AuthContext";
+import { InstitutionProfileProvider, useInstitutionProfile } from "@/context/InstitutionProfileContext";
 
 const navigation = [
   { label: "Overview", href: "/institution/dashboard" },
+  { label: "Profile", href: "/institution/profile" },
   { label: "Students", href: "/institution/students" },
   { label: "Certificates", href: "/institution/certificates" },
   { label: "Verification activity", href: "/institution/verifications" },
@@ -14,27 +17,44 @@ const navigation = [
 ];
 
 export default function InstitutionLayout({ children }: { children: ReactNode }) {
-  const { user, isLoading, logout } = useAuth();
-  const pathname = usePathname();
+  const { user, isLoading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (!isLoading && (!user || user.role !== "institution")) router.replace("/login");
   }, [isLoading, router, user]);
 
+  if (isLoading || !user || user.role !== "institution") {
+    return <main className="flex min-h-screen items-center justify-center text-slate-600">Checking your institution session...</main>;
+  }
+
+  // The profile is only fetched once the session is confirmed to be an institution.
+  return (
+    <InstitutionProfileProvider>
+      <InstitutionShell email={user.email}>{children}</InstitutionShell>
+    </InstitutionProfileProvider>
+  );
+}
+
+function InstitutionShell({ email, children }: { email: string; children: ReactNode }) {
+  const { logout } = useAuth();
+  const { profile } = useInstitutionProfile();
+  const pathname = usePathname();
+  const router = useRouter();
+
   function handleLogout() {
     logout();
     router.replace("/login");
   }
 
-  if (isLoading || !user || user.role !== "institution") {
-    return <main className="flex min-h-screen items-center justify-center text-slate-600">Checking your institution session...</main>;
-  }
-
   return (
     <div className="min-h-screen bg-slate-100 md:flex">
       <aside className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white p-5 md:sticky md:top-0 md:h-screen md:w-64 md:border-b-0 md:border-r">
-        <Link className="text-lg font-semibold text-slate-950" href="/institution/dashboard">Credential ecosystem</Link>
+        <Link className="block text-lg font-semibold text-slate-950" href="/institution/dashboard">
+          {profile?.logoUrl
+            ? <AssetImage alt={profile.name} className="max-h-10 w-auto max-w-full object-contain" path={profile.logoUrl} />
+            : profile?.name ?? "Credential ecosystem"}
+        </Link>
         <p className="mt-1 text-sm text-slate-500">Institution workspace</p>
         <nav aria-label="Institution navigation" className="mt-6 flex gap-2 overflow-x-auto md:flex-col">
           {navigation.map((item) => {
@@ -52,7 +72,7 @@ export default function InstitutionLayout({ children }: { children: ReactNode })
           })}
         </nav>
         <div className="mt-6 flex items-center justify-between gap-3 border-t border-slate-200 pt-5 md:mt-auto md:block">
-          <p className="min-w-0 break-all text-sm text-slate-600">{user.email}</p>
+          <p className="min-w-0 break-all text-sm text-slate-600">{email}</p>
           <button
             className="mt-0 shrink-0 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 md:mt-3"
             onClick={handleLogout}
