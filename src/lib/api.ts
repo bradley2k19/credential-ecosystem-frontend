@@ -238,8 +238,8 @@ export function createInstitutionStudent(data: CreateStudentData) {
   }, true);
 }
 
-export function getInstitutionStudents() {
-  return request<StudentListResponse>("/api/institutions/students", { method: "GET" }, true);
+export function getInstitutionStudents(page = 1, limit = 20) {
+  return request<StudentListResponse>(`/api/institutions/students?page=${page}&limit=${limit}`, { method: "GET" }, true);
 }
 
 export function createInstitutionCertificate(data: CreateCertificateData) {
@@ -656,11 +656,37 @@ export function archiveSignatory(signatoryId: string) {
   return request<{ message: string }>(`/api/institutions/me/signatories/${encodeURIComponent(signatoryId)}`, { method: "DELETE" }, true);
 }
 
+export interface NumericRange {
+  min: number;
+  max: number;
+}
+
+/** The limits of design format version 1, as sent by GET /api/templates/options (inclusive). */
+export interface DesignLimits {
+  borderWidthMm: NumericRange;
+  borderInsetMm: NumericRange;
+  watermarkOpacity: NumericRange;
+  logoHeightMm: NumericRange;
+  institutionNameSizePt: NumericRange;
+  titleSizePt: NumericRange;
+  titleLetterSpacing: NumericRange;
+  bodySizePt: NumericRange;
+  bodyLineHeight: NumericRange;
+  nameSizePt: NumericRange;
+  footerSizePt: NumericRange;
+  qrSizeMm: NumericRange;
+  titleTextMaxLength: number;
+  bodyTextMaxLength: number;
+  footerTextMaxLength: number;
+  maxSignatories: number;
+  maxDesignBytes: number;
+}
+
 export interface TemplateOptions {
   fonts: { id: string; label: string; role: "heading" | "body" | "script" }[];
   placeholders: { name: string; label: string; sample: string }[];
-  dateFormats: { id: string; example: string }[];
-  limits: Record<string, number | { min: number; max: number }>;
+  dateFormats: { id: TemplateDesign["fields"]["dateFormat"]; example: string }[];
+  limits: DesignLimits;
   starters: { id: string; name: string; description: string; design: TemplateDesign }[];
 }
 
@@ -679,6 +705,31 @@ export function getTemplateOptions() {
 
 export function getInstitutionTemplates(includeArchived = false) {
   return request<{ templates: CertificateTemplateRecord[] }>(`/api/institutions/me/templates?includeArchived=${includeArchived}`, { method: "GET" }, true);
+}
+
+export function getInstitutionTemplate(templateId: string) {
+  return request<CertificateTemplateRecord>(`/api/institutions/me/templates/${encodeURIComponent(templateId)}`, { method: "GET" }, true);
+}
+
+export function createInstitutionTemplate(data: { name: string; design: TemplateDesign }) {
+  return request<CertificateTemplateRecord>("/api/institutions/me/templates", { method: "POST", body: JSON.stringify(data) }, true);
+}
+
+export function updateInstitutionTemplate(templateId: string, data: { name: string; design: TemplateDesign }) {
+  return request<CertificateTemplateRecord>(`/api/institutions/me/templates/${encodeURIComponent(templateId)}`, { method: "PUT", body: JSON.stringify(data) }, true);
+}
+
+export function cloneInstitutionTemplate(templateId: string, name: string) {
+  return request<CertificateTemplateRecord>(`/api/institutions/me/templates/${encodeURIComponent(templateId)}/clone`, { method: "POST", body: JSON.stringify({ name }) }, true);
+}
+
+/** Makes the template the default, or clears the default when templateId is null. */
+export function setDefaultInstitutionTemplate(templateId: string | null) {
+  return request<{ defaultTemplateId: string | null }>("/api/institutions/me/templates/default", { method: "PUT", body: JSON.stringify({ templateId }) }, true);
+}
+
+export function setInstitutionTemplateArchived(templateId: string, archived: boolean) {
+  return request<CertificateTemplateRecord>(`/api/institutions/me/templates/${encodeURIComponent(templateId)}/${archived ? "archive" : "unarchive"}`, { method: "POST" }, true);
 }
 
 export function getAdminAuditLogs(page = 1, limit = 20, action = "") {

@@ -214,37 +214,67 @@ function DetailsForm({ profile }: { profile: InstitutionProfileDetails }) {
 function BrandImagePanel({ kind, currentPath }: { kind: "logo" | "seal"; currentPath: string | null }) {
   const { setProfile } = useInstitutionProfile();
   const inputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
   const [prepared, setPrepared] = useState<PreparedImage | null>(null);
+  // The same image with near-white pixels made transparent, prepared when "Remove white background" is ticked.
+  const [cleaned, setCleaned] = useState<PreparedImage | null>(null);
+  const [removeWhite, setRemoveWhite] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const label = kind === "logo" ? "Logo" : "Seal";
+  const selected = removeWhite && cleaned ? cleaned : prepared;
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const chosen = event.target.files?.[0];
     event.target.value = "";
-    if (!file) return;
+    if (!chosen) return;
     setMessage("");
     setError("");
     setIsBusy(true);
     try {
-      setPrepared(await prepareImageForUpload(file, kind));
+      const original = await prepareImageForUpload(chosen, kind);
+      const processed = removeWhite ? await prepareImageForUpload(chosen, kind, { removeWhiteBackground: true }) : null;
+      setFile(chosen);
+      setPrepared(original);
+      setCleaned(processed);
     } catch (prepareError) {
-      setPrepared(null);
+      clearSelection();
       setError(errorText(prepareError, "The image could not be processed."));
     } finally {
       setIsBusy(false);
     }
   }
 
-  async function upload() {
-    if (!prepared) return;
+  async function toggleRemoveWhite(checked: boolean) {
+    setRemoveWhite(checked);
+    if (!checked || !file || cleaned) return;
     setIsBusy(true);
     setError("");
     try {
-      setProfile(await setInstitutionBrandImage(kind, { data: prepared.data, mimeType: prepared.mimeType }));
-      setPrepared(null);
+      setCleaned(await prepareImageForUpload(file, kind, { removeWhiteBackground: true }));
+    } catch (prepareError) {
+      setRemoveWhite(false);
+      setError(errorText(prepareError, "The background could not be removed."));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  function clearSelection() {
+    setFile(null);
+    setPrepared(null);
+    setCleaned(null);
+  }
+
+  async function upload() {
+    if (!selected) return;
+    setIsBusy(true);
+    setError("");
+    try {
+      setProfile(await setInstitutionBrandImage(kind, { data: selected.data, mimeType: selected.mimeType }));
+      clearSelection();
       setMessage(`${label} ${currentPath ? "replaced" : "uploaded"}.`);
     } catch (uploadError) {
       setError(errorText(uploadError, `The ${kind} could not be uploaded.`));
@@ -271,15 +301,28 @@ function BrandImagePanel({ kind, currentPath }: { kind: "logo" | "seal"; current
   return (
     <div className="rounded-lg border border-slate-200 p-4">
       <h3 className="font-semibold text-slate-950">{label}</h3>
-      <div className={`mt-3 flex h-40 items-center justify-center overflow-hidden rounded-md border border-slate-200 ${checkerboardClasses}`}>
-        {prepared
-          ? <AssetImage alt={`New ${kind} preview`} className="max-h-36 max-w-[90%] object-contain" src={prepared.previewUrl} />
-          : currentPath
-            ? <AssetImage alt={`Current ${kind}`} className="max-h-36 max-w-[90%] object-contain" path={currentPath} />
-            : <span className="text-sm text-slate-500">No {kind} uploaded</span>}
-      </div>
+      {prepared && removeWhite && cleaned ? (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <BrandImagePreview image={prepared} kind={kind} label="Before" />
+          <BrandImagePreview image={cleaned} kind={kind} label="After" />
+        </div>
+      ) : (
+        <div className={`mt-3 flex h-40 items-center justify-center overflow-hidden rounded-md border border-slate-200 ${checkerboardClasses}`}>
+          {prepared
+            ? <AssetImage alt={`New ${kind} preview`} className="max-h-36 max-w-[90%] object-contain" src={prepared.previewUrl} />
+            : currentPath
+              ? <AssetImage alt={`Current ${kind}`} className="max-h-36 max-w-[90%] object-contain" path={currentPath} />
+              : <span className="text-sm text-slate-500">No {kind} uploaded</span>}
+        </div>
+      )}
       {prepared && (
-        <p className="mt-2 text-xs text-slate-600">Ready to upload: {prepared.width} × {prepared.height} px, {formatBytes(prepared.sizeBytes)} ({prepared.mimeType === "image/png" ? "PNG" : "JPEG"})</p>
+        <label className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-700">
+          <input checked={removeWhite} className="size-4 accent-teal-700" disabled={isBusy} onChange={(event) => void toggleRemoveWhite(event.target.checked)} type="checkbox" />
+          Remove white background
+        </label>
+      )}
+      {selected && (
+        <p className="mt-2 text-xs text-slate-600">Ready to upload: {selected.width} × {selected.height} px, {formatBytes(selected.sizeBytes)} ({selected.mimeType === "image/png" ? "PNG" : "JPEG"})</p>
       )}
 
       <input accept="image/png,image/jpeg" className="sr-only" id={`${kind}-file`} onChange={handleFileChange} ref={inputRef} type="file" />
@@ -289,7 +332,7 @@ function BrandImagePanel({ kind, currentPath }: { kind: "logo" | "seal"; current
             <button className="rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60" disabled={isBusy} onClick={() => void upload()} type="button">
               {isBusy ? "Uploading..." : `Save ${kind}`}
             </button>
-            <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" disabled={isBusy} onClick={() => setPrepared(null)} type="button">Cancel</button>
+            <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" disabled={isBusy} onClick={clearSelection} type="button">Cancel</button>
           </>
         ) : confirmRemove ? (
           <>
@@ -314,5 +357,17 @@ function BrandImagePanel({ kind, currentPath }: { kind: "logo" | "seal"; current
       {error && <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" role="alert">{error}</p>}
       <p className="mt-3 text-xs text-slate-500">PNG or JPEG. Larger images are scaled down to {kind === "logo" ? "800" : "600"} px automatically.</p>
     </div>
+  );
+}
+
+/** One side of the before/after comparison, on a checkerboard so transparent areas are visible. */
+function BrandImagePreview({ image, kind, label }: { image: PreparedImage; kind: "logo" | "seal"; label: "Before" | "After" }) {
+  return (
+    <figure>
+      <div className={`flex h-32 items-center justify-center overflow-hidden rounded-md border border-slate-200 ${checkerboardClasses}`}>
+        <AssetImage alt={`${label}: new ${kind}`} className="max-h-28 max-w-[90%] object-contain" src={image.previewUrl} />
+      </div>
+      <figcaption className="mt-1 text-center text-xs font-semibold text-slate-600">{label}</figcaption>
+    </figure>
   );
 }

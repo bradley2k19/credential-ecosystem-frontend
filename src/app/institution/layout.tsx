@@ -42,6 +42,7 @@ function InstitutionShell({ email, children }: { email: string; children: ReactN
   const { profile } = useInstitutionProfile();
   const pathname = usePathname();
   const router = useRouter();
+  const isEditorRoute = /^\/institution\/templates\/[^/]+$/.test(pathname);
 
   function handleLogout() {
     logout();
@@ -59,7 +60,7 @@ function InstitutionShell({ email, children }: { email: string; children: ReactN
         <p className="mt-1 text-sm text-slate-500">Institution workspace</p>
         <nav aria-label="Institution navigation" className="mt-6 flex gap-2 overflow-x-auto md:flex-col">
           {navigation.map((item) => {
-            const isActive = pathname === item.href;
+            const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
               <Link
                 aria-current={isActive ? "page" : undefined}
@@ -83,8 +84,9 @@ function InstitutionShell({ email, children }: { email: string; children: ReactN
           </button>
         </div>
       </aside>
-      <main className="min-w-0 flex-1 px-4 py-8 sm:px-6 lg:px-10">
-        <div className="mx-auto max-w-5xl">{children}</div>
+      {/* The template editor uses the full width and height (settings panel beside the preview). */}
+      <main className={`min-w-0 flex-1 ${isEditorRoute ? "px-4 py-8 lg:px-4 lg:py-4" : "px-4 py-8 sm:px-6 lg:px-10"}`}>
+        <div className={isEditorRoute ? "mx-auto max-w-5xl lg:max-w-none" : "mx-auto max-w-5xl"}>{children}</div>
       </main>
     </div>
   );
