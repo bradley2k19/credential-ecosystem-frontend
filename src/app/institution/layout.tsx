@@ -10,6 +10,7 @@ import { InstitutionProfileProvider, useInstitutionProfile } from "@/context/Ins
 const navigation = [
   { label: "Overview", href: "/institution/dashboard" },
   { label: "Profile", href: "/institution/profile" },
+  { label: "Templates", href: "/institution/templates" },
   { label: "Students", href: "/institution/students" },
   { label: "Certificates", href: "/institution/certificates" },
   { label: "Verification activity", href: "/institution/verifications" },

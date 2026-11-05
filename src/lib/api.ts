@@ -1,3 +1,5 @@
+import type { RenderSnapshot, TemplateDesign } from "@/lib/certificateDesign";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
 
 export interface InstitutionRegistrationData {
@@ -251,6 +253,28 @@ export function getInstitutionCertificates() {
   return request<CertificateListResponse>("/api/institutions/certificates?limit=100", { method: "GET" }, true);
 }
 
+/** The institution's single-certificate response. It never includes the certificate hash. */
+export interface InstitutionCertificateDetail {
+  id: string;
+  certificateUid: string;
+  certificateType: string;
+  programName: string;
+  classification: string | null;
+  issueDate: string;
+  graduationDate: string | null;
+  status: "ACTIVE" | "REVOKED" | string;
+  revokedReason?: string | null;
+  student: { fullName: string; studentNumber: string };
+  institutionName: string;
+  templateName: string | null;
+  renderSnapshot: RenderSnapshot;
+  snapshotIsFallback: boolean;
+}
+
+export function getInstitutionCertificate(certificateId: string) {
+  return request<InstitutionCertificateDetail>(`/api/institutions/certificates/${encodeURIComponent(certificateId)}`, { method: "GET" }, true);
+}
+
 export function revokeInstitutionCertificate(certificateId: string, revokedReason: string) {
   return request<CertificateRecord>(`/api/institutions/certificates/${encodeURIComponent(certificateId)}/revoke`, {
     method: "PATCH",
@@ -346,8 +370,16 @@ export function getStudentCertificates() {
   return request<StudentCertificateListResponse>("/api/students/me/certificates?limit=100", { method: "GET" }, true);
 }
 
+/** The single-certificate response: everything the renderer needs, including the frozen (or fallback) snapshot. */
+export interface StudentCertificateDetail extends StudentCertificate {
+  student: { fullName: string; studentNumber: string };
+  renderSnapshot: RenderSnapshot;
+  /** True for certificates issued before templates: the backend computed a plain Classic snapshot. */
+  snapshotIsFallback: boolean;
+}
+
 export function getStudentCertificate(certificateId: string) {
-  return request<StudentCertificate>(`/api/students/me/certificates/${encodeURIComponent(certificateId)}`, { method: "GET" }, true);
+  return request<StudentCertificateDetail>(`/api/students/me/certificates/${encodeURIComponent(certificateId)}`, { method: "GET" }, true);
 }
 
 export function getStudentVerificationHistory(page = 1, limit = 20) {
@@ -622,6 +654,31 @@ export function removeSignatorySignature(signatoryId: string) {
 /** Archives the signatory; it is never deleted. */
 export function archiveSignatory(signatoryId: string) {
   return request<{ message: string }>(`/api/institutions/me/signatories/${encodeURIComponent(signatoryId)}`, { method: "DELETE" }, true);
+}
+
+export interface TemplateOptions {
+  fonts: { id: string; label: string; role: "heading" | "body" | "script" }[];
+  placeholders: { name: string; label: string; sample: string }[];
+  dateFormats: { id: string; example: string }[];
+  limits: Record<string, number | { min: number; max: number }>;
+  starters: { id: string; name: string; description: string; design: TemplateDesign }[];
+}
+
+export interface CertificateTemplateRecord {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  isArchived: boolean;
+  design: TemplateDesign;
+  updatedAt: string;
+}
+
+export function getTemplateOptions() {
+  return request<TemplateOptions>("/api/templates/options", { method: "GET" }, true);
+}
+
+export function getInstitutionTemplates(includeArchived = false) {
+  return request<{ templates: CertificateTemplateRecord[] }>(`/api/institutions/me/templates?includeArchived=${includeArchived}`, { method: "GET" }, true);
 }
 
 export function getAdminAuditLogs(page = 1, limit = 20, action = "") {

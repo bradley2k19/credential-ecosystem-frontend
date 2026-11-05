@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { CertificatePreviewDialog } from "@/components/certificate/CertificatePreviewDialog";
 import {
   createInstitutionCertificate,
   getInstitutionCertificateBlockchainStatus,
@@ -106,6 +107,7 @@ export function InstitutionCertificates() {
   const [transactionHash, setTransactionHash] = useState("");
   const [rowAction, setRowAction] = useState<RowAction | null>(null);
   const [checkingStatusId, setCheckingStatusId] = useState("");
+  const [previewCertificateId, setPreviewCertificateId] = useState("");
 
   const linkedWallet = issuerStatus?.walletAddress;
   const isBusy = busyPhases.includes(issuanceState) || (rowAction !== null && busyPhases.includes(rowAction.phase));
@@ -380,6 +382,7 @@ export function InstitutionCertificates() {
                       key={certificate.id}
                       onCheckStatus={() => void handleCheckStatus(certificate)}
                       onClose={() => setRowAction(null)}
+                      onPreview={() => setPreviewCertificateId(certificate.id)}
                       onReasonChange={(reason) => updateRowAction({ reason, reasonError: "" })}
                       onRetry={() => void handleRetry(certificate)}
                       onRevokeOpen={() => openRowAction(certificate.id, "revoke")}
@@ -393,6 +396,7 @@ export function InstitutionCertificates() {
           </div>
         )}
       </section>
+      {previewCertificateId && <CertificatePreviewDialog certificateId={previewCertificateId} onClose={() => setPreviewCertificateId("")} />}
     </div>
   );
 }
@@ -416,6 +420,7 @@ function CertificateRows({
   onRetry,
   onCheckStatus,
   onClose,
+  onPreview,
 }: {
   certificate: CertificateRecord;
   step: ReturnType<typeof currentChainStep>;
@@ -428,6 +433,7 @@ function CertificateRows({
   onRetry: () => void;
   onCheckStatus: () => void;
   onClose: () => void;
+  onPreview: () => void;
 }) {
   const stepLabel = step.txType === "ISSUE" ? "Issuance" : "Revocation";
   const actionInProgress = action !== null && busyPhases.includes(action.phase);
@@ -447,6 +453,7 @@ function CertificateRows({
         </td>
         <td className="whitespace-nowrap px-4 py-3 text-right">
           <div className="flex justify-end gap-2">
+            <button className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={onPreview} type="button">Preview</button>
             {(step.state === "missing" || step.state === "failed") && (
               <button className="rounded-md border border-teal-600 px-3 py-1.5 text-xs font-semibold text-teal-800 hover:bg-teal-50 disabled:opacity-50" disabled={isBusy} onClick={onRetry} type="button">Retry on-chain step</button>
             )}

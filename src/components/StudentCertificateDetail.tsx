@@ -4,17 +4,18 @@ import Image from "next/image";
 import Link from "next/link";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
+import { ScaledCertificate } from "@/components/certificate/ScaledCertificate";
 import { CertificateStatusBadge, isConfirmedOnChain, OnChainBadge } from "@/components/StudentCertificateBadges";
-import { getStudentCertificate, getStudentProfile, type StudentCertificate, type StudentProfile } from "@/lib/api";
+import { getStudentCertificate, type StudentCertificateDetail as StudentCertificateRecord } from "@/lib/api";
 import { getQrVerificationLink, getVerificationLink } from "@/lib/appUrl";
-import { downloadCertificatePdf } from "@/lib/certificatePdf";
+import { renderDataFromCertificate } from "@/lib/certificateDesign";
+import { certificatePdfFileName, exportCertificatePdf } from "@/lib/certificatePdf";
 import { formatCertificateDate } from "@/lib/verification";
 
 const QR_SIZE = 256;
 
 export function StudentCertificateDetail({ certificateId }: { certificateId: string }) {
-  const [certificate, setCertificate] = useState<StudentCertificate | null>(null);
-  const [profile, setProfile] = useState<StudentProfile | null>(null);
+  const [certificate, setCertificate] = useState<StudentCertificateRecord | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [qrDataUrl, setQrDataUrl] = useState("");
@@ -24,13 +25,12 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
 
   useEffect(() => {
     let active = true;
-    void Promise.all([getStudentCertificate(certificateId), getStudentProfile()])
-      .then(async ([loadedCertificate, loadedProfile]) => {
-        // Generated at 2x the display size so it stays sharp on screen and in the PDF.
+    void getStudentCertificate(certificateId)
+      .then(async (loadedCertificate) => {
+        // Generated at 2x the display size so it stays sharp on screen.
         const qr = await QRCode.toDataURL(getQrVerificationLink(loadedCertificate.certificateUid), { width: QR_SIZE * 2, margin: 2, errorCorrectionLevel: "M" });
         if (!active) return;
         setCertificate(loadedCertificate);
-        setProfile(loadedProfile);
         setQrDataUrl(qr);
       })
       .catch((requestError: unknown) => {
@@ -43,7 +43,7 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
   const backLink = <Link className="text-sm font-semibold text-teal-700 hover:text-teal-900" href="/student/dashboard">&larr; Back to my certificates</Link>;
 
   if (isLoading) return <p className="text-sm text-slate-600">Loading certificate...</p>;
-  if (error || !certificate || !profile) {
+  if (error || !certificate) {
     return (
       <div className="space-y-4">
         {backLink}
@@ -53,6 +53,7 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
   }
 
   const isRevoked = certificate.status === "REVOKED";
+  const renderData = renderDataFromCertificate(certificate);
   const verificationLink = getVerificationLink(certificate.certificateUid);
   const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
 
@@ -85,7 +86,11 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
     setActionError("");
     setIsGeneratingPdf(true);
     try {
-      await downloadCertificatePdf({ certificate: certificate!, profile: profile!, qrDataUrl });
+      await exportCertificatePdf({
+        snapshot: certificate!.renderSnapshot,
+        data: renderData,
+        fileName: certificatePdfFileName(certificate!.programName, certificate!.certificateUid),
+      });
     } catch {
       setActionError("The PDF could not be generated. Please try again.");
     } finally {
@@ -120,8 +125,13 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
         </p>
       )}
 
+      <section aria-label="Certificate" className="rounded-md bg-slate-100 p-4 sm:p-6">
+        <ScaledCertificate data={renderData} snapshot={certificate.renderSnapshot} />
+        {certificate.snapshotIsFallback && <p className="mt-3 text-center text-xs text-slate-500">This certificate was issued before custom templates.</p>}
+      </section>
+
       <dl className="grid gap-x-6 gap-y-4 rounded-md border border-slate-200 p-5 sm:grid-cols-2">
-        <Detail label="Awarded to" value={`${profile.fullName} (${profile.studentNumber})`} />
+        <Detail label="Awarded to" value={`${certificate.student.fullName} (${certificate.student.studentNumber})`} />
         <Detail label="Institution" value={certificate.institutionName} />
         <Detail label="Certificate type" value={certificate.certificateType} />
         <Detail label="Programme" value={certificate.programName} />
