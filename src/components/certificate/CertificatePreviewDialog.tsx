@@ -1,18 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { CertificateExportFeedback, useCertificateExport } from "@/components/certificate/CertificateExport";
 import { ScaledCertificate } from "@/components/certificate/ScaledCertificate";
 import { getInstitutionCertificate, type InstitutionCertificateDetail } from "@/lib/api";
 import { renderDataFromCertificate } from "@/lib/certificateDesign";
-import { certificatePdfFileName, exportCertificatePdf } from "@/lib/certificatePdf";
+import { certificatePdfFileName } from "@/lib/certificatePdf";
 
 /** A modal showing one of the institution's certificates with the shared renderer, plus its PDF download. */
 export function CertificatePreviewDialog({ certificateId, onClose }: { certificateId: string; onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [certificate, setCertificate] = useState<InstitutionCertificateDetail | null>(null);
   const [error, setError] = useState("");
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportError, setExportError] = useState("");
+  const { isExporting, result, failure, runExport } = useCertificateExport();
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -31,21 +31,13 @@ export function CertificatePreviewDialog({ certificateId, onClose }: { certifica
 
   const isRevoked = certificate?.status === "REVOKED";
 
-  async function handleDownload() {
+  function handleDownload() {
     if (!certificate || isRevoked) return;
-    setIsExporting(true);
-    setExportError("");
-    try {
-      await exportCertificatePdf({
-        snapshot: certificate.renderSnapshot,
-        data: renderDataFromCertificate(certificate),
-        fileName: certificatePdfFileName(certificate.programName, certificate.certificateUid),
-      });
-    } catch {
-      setExportError("The PDF could not be generated. Please try again.");
-    } finally {
-      setIsExporting(false);
-    }
+    void runExport({
+      snapshot: certificate.renderSnapshot,
+      data: renderDataFromCertificate(certificate),
+      fileName: certificatePdfFileName(certificate.programName, certificate.certificateUid),
+    });
   }
 
   return (
@@ -78,15 +70,18 @@ export function CertificatePreviewDialog({ certificateId, onClose }: { certifica
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <button
+              aria-busy={isExporting}
               className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
               disabled={isRevoked || isExporting}
-              onClick={() => void handleDownload()}
+              onClick={handleDownload}
               type="button"
             >
               {isExporting ? "Preparing PDF..." : "Download PDF"}
             </button>
             {isRevoked && <p className="text-sm text-amber-900">This certificate has been revoked and cannot be downloaded.</p>}
-            {exportError && <p className="text-sm text-red-700" role="alert">{exportError}</p>}
+          </div>
+          <div className="mt-2">
+            <CertificateExportFeedback failure={failure} result={result} />
           </div>
         </>
       )}

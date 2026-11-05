@@ -4,12 +4,13 @@ import Image from "next/image";
 import Link from "next/link";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
+import { CertificateExportFeedback, useCertificateExport } from "@/components/certificate/CertificateExport";
 import { ScaledCertificate } from "@/components/certificate/ScaledCertificate";
 import { CertificateStatusBadge, isConfirmedOnChain, OnChainBadge } from "@/components/StudentCertificateBadges";
 import { getStudentCertificate, type StudentCertificateDetail as StudentCertificateRecord } from "@/lib/api";
 import { getQrVerificationLink, getVerificationLink } from "@/lib/appUrl";
 import { renderDataFromCertificate } from "@/lib/certificateDesign";
-import { certificatePdfFileName, exportCertificatePdf } from "@/lib/certificatePdf";
+import { certificatePdfFileName } from "@/lib/certificatePdf";
 import { formatCertificateDate } from "@/lib/verification";
 
 const QR_SIZE = 256;
@@ -21,7 +22,7 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
   const [qrDataUrl, setQrDataUrl] = useState("");
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const { isExporting, result: exportResult, failure: exportFailure, runExport } = useCertificateExport();
 
   useEffect(() => {
     let active = true;
@@ -82,20 +83,14 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
     }
   }
 
-  async function handleDownload() {
+  function handleDownload() {
+    if (isRevoked) return;
     setActionError("");
-    setIsGeneratingPdf(true);
-    try {
-      await exportCertificatePdf({
-        snapshot: certificate!.renderSnapshot,
-        data: renderData,
-        fileName: certificatePdfFileName(certificate!.programName, certificate!.certificateUid),
-      });
-    } catch {
-      setActionError("The PDF could not be generated. Please try again.");
-    } finally {
-      setIsGeneratingPdf(false);
-    }
+    void runExport({
+      snapshot: certificate!.renderSnapshot,
+      data: renderData,
+      fileName: certificatePdfFileName(certificate!.programName, certificate!.certificateUid),
+    });
   }
 
   return (
@@ -163,10 +158,13 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
             </div>
 
             <div className="border-t border-slate-200 pt-4">
-              <button className="rounded-md border border-teal-600 px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400 disabled:hover:bg-transparent" disabled={isRevoked || isGeneratingPdf} onClick={() => void handleDownload()} type="button">
-                {isGeneratingPdf ? "Preparing PDF..." : "Download PDF"}
+              <button aria-busy={isExporting} className="rounded-md border border-teal-600 px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400 disabled:hover:bg-transparent" disabled={isRevoked || isExporting} onClick={handleDownload} type="button">
+                {isExporting ? "Preparing PDF..." : "Download PDF"}
               </button>
               {isRevoked && <p className="mt-2 text-sm text-amber-900">This certificate has been revoked and cannot be downloaded.</p>}
+              <div className="mt-2">
+                <CertificateExportFeedback failure={exportFailure} result={exportResult} />
+              </div>
             </div>
 
             {actionError && <p className="text-sm text-red-700" role="alert">{actionError}</p>}

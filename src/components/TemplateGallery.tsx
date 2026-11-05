@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { CertificateExportFeedback, useCertificateExport } from "@/components/certificate/CertificateExport";
 import type { CertificateLayout } from "@/components/certificate/CertificateRenderer";
 import { ScaledCertificate } from "@/components/certificate/ScaledCertificate";
 import { useInstitutionProfile } from "@/context/InstitutionProfileContext";
@@ -13,7 +14,7 @@ import {
   type TemplateOptions,
 } from "@/lib/api";
 import { buildPreviewSnapshot, type CertificateRenderData, type RenderSnapshot, type TemplateDesign } from "@/lib/certificateDesign";
-import { certificatePdfFileName, exportCertificatePdf } from "@/lib/certificatePdf";
+import { certificatePdfFileName } from "@/lib/certificatePdf";
 
 type NameLength = "short" | "long" | "veryLong";
 
@@ -181,26 +182,10 @@ function TemplatePreview({ name, description, badge, snapshot, data, downloadabl
   downloadable?: boolean;
 }) {
   const [layout, setLayout] = useState<CertificateLayout | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportMessage, setExportMessage] = useState("");
-  const [exportError, setExportError] = useState("");
+  const { isExporting, result, failure, runExport } = useCertificateExport();
 
-  async function handleDownload() {
-    setIsExporting(true);
-    setExportMessage("");
-    setExportError("");
-    try {
-      const result = await exportCertificatePdf({
-        snapshot,
-        data,
-        fileName: certificatePdfFileName(`${name} sample`, data.certificateUid),
-      });
-      setExportMessage(`PDF downloaded (${(result.sizeBytes / 1024 / 1024).toFixed(1)} MB).`);
-    } catch {
-      setExportError("The PDF could not be generated. Please try again.");
-    } finally {
-      setIsExporting(false);
-    }
+  function handleDownload() {
+    void runExport({ snapshot, data, fileName: certificatePdfFileName(`${name} sample`, data.certificateUid) });
   }
 
   return (
@@ -217,13 +202,14 @@ function TemplatePreview({ name, description, badge, snapshot, data, downloadabl
           <FitStatus layout={layout} />
         </div>
         {downloadable && (
-          <button className="rounded-md border border-teal-600 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:opacity-60" disabled={isExporting} onClick={() => void handleDownload()} type="button">
+          <button aria-busy={isExporting} className="rounded-md border border-teal-600 px-3 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-wait disabled:opacity-60" disabled={isExporting} onClick={handleDownload} type="button">
             {isExporting ? "Preparing PDF..." : "Download sample PDF"}
           </button>
         )}
       </div>
-      {exportMessage && <p className="mt-2 text-sm text-emerald-700" role="status">{exportMessage}</p>}
-      {exportError && <p className="mt-2 text-sm text-red-700" role="alert">{exportError}</p>}
+      <div className="mt-2">
+        <CertificateExportFeedback failure={failure} result={result} showSize />
+      </div>
       <div className="mt-4 rounded-md bg-slate-100 p-4">
         <ScaledCertificate data={data} onLayout={setLayout} snapshot={snapshot} />
       </div>

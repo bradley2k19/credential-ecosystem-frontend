@@ -130,11 +130,14 @@ export function splitBody(text: string, values: Record<string, string>) {
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The only image URL the renderer ever uses: the API's asset route, and only for a well-formed id. */
+/**
+ * The only image URL the renderer ever uses: this site's same-origin proxy of the API's asset route (see the
+ * rewrite in next.config.ts), and only for a well-formed id. Same-origin images need no CORS, so the browser
+ * cache can never hand the renderer or the PDF capture a copy that fails a CORS check.
+ */
 export function certificateAssetUrl(assetId: string | null | undefined) {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
-  if (!apiUrl || !assetId || !uuidPattern.test(assetId)) return null;
-  return `${apiUrl}/api/assets/${assetId}`;
+  if (!process.env.NEXT_PUBLIC_API_URL || !assetId || !uuidPattern.test(assetId)) return null;
+  return `/asset-proxy/${assetId}`;
 }
 
 /** The asset id at the end of an API path such as /api/assets/<id>, or null. */

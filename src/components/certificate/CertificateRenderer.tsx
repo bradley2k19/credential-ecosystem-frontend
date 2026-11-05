@@ -239,14 +239,18 @@ export function CertificateRenderer({
 
 type Design = RenderSnapshot["design"];
 
-/** An asset image; omitted entirely when the URL is missing or the image fails to load. */
-function AssetImg({ src, alt, style }: { src: string | null; alt: string; style: CSSProperties }) {
+/**
+ * An asset image; omitted entirely when the URL is missing, and hidden when the image fails to load. `label`
+ * names it in plain words ("logo", "signature of ..."), so a PDF export that has to leave it out can say which.
+ */
+function AssetImg({ src, alt, label, style }: { src: string | null; alt: string; label: string; style: CSSProperties }) {
   if (!src) return null;
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       alt={alt}
       crossOrigin="anonymous"
+      data-asset-label={label}
       onError={(event) => { event.currentTarget.style.display = "none"; }}
       src={src}
       style={{ objectFit: "contain", display: "block", ...style }}
@@ -259,7 +263,7 @@ function Watermark({ design, logoUrl, sealUrl }: { design: Design; logoUrl: stri
   if (!source) return null;
   return (
     <div aria-hidden="true" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 0 }}>
-      <AssetImg alt="" src={source} style={{ width: "50%", height: "70%", opacity: design.background.watermarkOpacity }} />
+      <AssetImg alt="" label={design.background.watermark === "logo" ? "logo" : "seal"} src={source} style={{ width: "50%", height: "70%", opacity: design.background.watermarkOpacity }} />
     </div>
   );
 }
@@ -318,8 +322,8 @@ function Header({ design, colors, headingFamily, institutionName, logoUrl, sealU
   const imageStyle: CSSProperties = { height: mm(header.logoHeightMm), maxWidth: "100%" };
   const cell = (position: Align) => (
     <div style={{ display: "flex", justifyContent: flexAlign[position], alignItems: "center", minWidth: 0 }}>
-      {logo && header.logoPosition === position && <AssetImg alt={`${institutionName} logo`} src={logo} style={imageStyle} />}
-      {seal && sealPosition === position && <AssetImg alt={`${institutionName} seal`} src={seal} style={imageStyle} />}
+      {logo && header.logoPosition === position && <AssetImg alt={`${institutionName} logo`} label="logo" src={logo} style={imageStyle} />}
+      {seal && sealPosition === position && <AssetImg alt={`${institutionName} seal`} label="seal" src={seal} style={imageStyle} />}
     </div>
   );
 
@@ -366,7 +370,7 @@ function Signatories({ design, colors, signatories }: { design: Design; colors: 
           <div key={`${signatory.name}-${index}`} style={{ flex: "0 1 30%", minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
             {anySignature && (
               <div style={{ height: mm(SIGNATURE_MAX_HEIGHT_MM), width: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-                <AssetImg alt={`Signature of ${signatory.name}`} src={signatureUrl} style={{ maxHeight: mm(SIGNATURE_MAX_HEIGHT_MM), maxWidth: "100%" }} />
+                <AssetImg alt={`Signature of ${signatory.name}`} label={`signature of ${signatory.name}`} src={signatureUrl} style={{ maxHeight: mm(SIGNATURE_MAX_HEIGHT_MM), maxWidth: "100%" }} />
               </div>
             )}
             <div
