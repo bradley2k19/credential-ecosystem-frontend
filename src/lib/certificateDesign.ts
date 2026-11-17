@@ -53,9 +53,9 @@ export const MM_TO_PX = 3.7795;
 const pageSizesMm = { A4: { width: 297, height: 210 }, LETTER: { width: 279.4, height: 215.9 } } as const;
 
 /** Page size in millimetres; the long side is horizontal in landscape and vertical in portrait. */
-export function pageSizeMm(page: TemplateDesign["page"]) {
-  const size = pageSizesMm[page.size] ?? pageSizesMm.A4;
-  return page.orientation === "portrait" ? { width: size.height, height: size.width } : { width: size.width, height: size.height };
+export function pageSizeMm(page: TemplateDesign["page"] | undefined) {
+  const size = (page && pageSizesMm[page.size]) ?? pageSizesMm.A4;
+  return page?.orientation === "portrait" ? { width: size.height, height: size.width } : { width: size.width, height: size.height };
 }
 
 export function mm(value: number) {
@@ -166,7 +166,7 @@ export function buildPreviewSnapshot(
       logoAssetId: assetIdFromPath(profile.logoUrl),
       sealAssetId: assetIdFromPath(profile.sealUrl),
     },
-    signatories: design.signatories.ids
+    signatories: (Array.isArray(design.signatories?.ids) ? design.signatories.ids : [])
       .map((id) => signatories.find((signatory) => signatory.id === id))
       .filter((signatory): signatory is NonNullable<typeof signatory> => Boolean(signatory))
       .map((signatory) => ({ name: signatory.name, title: signatory.title, signatureAssetId: assetIdFromPath(signatory.signatureUrl) })),
@@ -199,5 +199,194 @@ export function renderDataFromCertificate(certificate: {
 
 /** Every font id a design uses, for loading them before a PDF capture. */
 export function designFontIds(design: TemplateDesign) {
-  return [...new Set([design.theme.headingFont, design.theme.bodyFont, design.theme.nameFont])];
+  const theme = normalizeDesign(design).theme;
+  return [...new Set([theme.headingFont, theme.bodyFont, theme.nameFont])];
+}
+
+/**
+ * Safe values for anything a design leaves out or gets wrong. They follow the Classic starter, so a design
+ * with a damaged field still looks like a certificate rather than failing to draw.
+ */
+const FALLBACK_DESIGN: TemplateDesign = {
+  schemaVersion: 1,
+  page: { size: "A4", orientation: "landscape" },
+  theme: {
+    primaryColor: "#1F2A44", accentColor: "#B08D57", textColor: "#1F2937", mutedColor: "#6B7280", backgroundColor: "#FFFFFF",
+    headingFont: "cinzel", bodyFont: "libre-baskerville", nameFont: "great-vibes",
+  },
+  border: { style: "none", widthMm: 1, color: "accent", insetMm: 10 },
+  background: { watermark: "none", watermarkOpacity: 0.06, accentBar: "none" },
+  header: { showLogo: true, showSeal: false, logoPosition: "center", logoHeightMm: 22, showInstitutionName: true, institutionNameColor: "primary", institutionNameSizePt: 20 },
+  title: { text: "Certificate", sizePt: 40, align: "center", color: "primary", letterSpacing: 0, uppercase: false },
+  body: { text: "This is to certify that {{student_name}} has been awarded the {{certificate_type}} in {{program_name}}.", sizePt: 14, align: "center", lineHeight: 1.6, nameSizePt: 36, nameColor: "primary" },
+  fields: { dateFormat: "DD MMMM YYYY", showClassification: true, showGraduationDate: true, showStudentNumber: false },
+  signatories: { ids: [], showTitles: true, lineStyle: "line" },
+  footer: { text: "", align: "center", sizePt: 9 },
+  verification: { qrPosition: "bottom-right", qrSizeMm: 26 },
+};
+
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}$/;
+
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+/** A finite number kept within a sane drawing range (far wider than the design limits, which validation enforces). */
+function finite(value: unknown, fallback: number, min: number, max: number) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
+function text(value: unknown, fallback: string) {
+  return typeof value === "string" ? value : fallback;
+}
+
+function flag(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function color(value: unknown, fallback: string) {
+  return typeof value === "string" && HEX_COLOR.test(value) ? value : fallback;
+}
+
+/** Plain-object section of an unknown value, so a missing or broken section reads as empty. */
+function sectionOf(value: unknown, key: string): Record<string, unknown> {
+  const section = value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+  return section && typeof section === "object" && !Array.isArray(section) ? (section as Record<string, unknown>) : {};
+}
+
+const TOKENS = ["primary", "accent", "text", "muted"] as const;
+const ALIGNS = ["left", "center", "right"] as const;
+
+/**
+ * Returns a design the renderer can always draw: every valid value is kept as is, and anything missing, of the
+ * wrong type or outside the allowed set falls back to a safe default. It never throws, whatever it is given.
+ */
+export function normalizeDesign(input: unknown): TemplateDesign {
+  const fb = FALLBACK_DESIGN;
+  const page = sectionOf(input, "page");
+  const theme = sectionOf(input, "theme");
+  const border = sectionOf(input, "border");
+  const background = sectionOf(input, "background");
+  const header = sectionOf(input, "header");
+  const title = sectionOf(input, "title");
+  const body = sectionOf(input, "body");
+  const fields = sectionOf(input, "fields");
+  const signatories = sectionOf(input, "signatories");
+  const footer = sectionOf(input, "footer");
+  const verification = sectionOf(input, "verification");
+  return {
+    schemaVersion: 1,
+    page: {
+      size: oneOf(page.size, ["A4", "LETTER"], fb.page.size),
+      orientation: oneOf(page.orientation, ["landscape", "portrait"], fb.page.orientation),
+    },
+    theme: {
+      primaryColor: color(theme.primaryColor, fb.theme.primaryColor),
+      accentColor: color(theme.accentColor, fb.theme.accentColor),
+      textColor: color(theme.textColor, fb.theme.textColor),
+      mutedColor: color(theme.mutedColor, fb.theme.mutedColor),
+      backgroundColor: color(theme.backgroundColor, fb.theme.backgroundColor),
+      headingFont: text(theme.headingFont, fb.theme.headingFont),
+      bodyFont: text(theme.bodyFont, fb.theme.bodyFont),
+      nameFont: text(theme.nameFont, fb.theme.nameFont),
+    },
+    border: {
+      style: oneOf(border.style, ["none", "single", "double", "frame"], fb.border.style),
+      widthMm: finite(border.widthMm, fb.border.widthMm, 0, 10),
+      color: oneOf(border.color, TOKENS, fb.border.color),
+      insetMm: finite(border.insetMm, fb.border.insetMm, 0, 40),
+    },
+    background: {
+      watermark: oneOf(background.watermark, ["none", "logo", "seal"], fb.background.watermark),
+      watermarkOpacity: finite(background.watermarkOpacity, fb.background.watermarkOpacity, 0, 1),
+      accentBar: oneOf(background.accentBar, ["none", "top", "left"], fb.background.accentBar),
+    },
+    header: {
+      showLogo: flag(header.showLogo, fb.header.showLogo),
+      showSeal: flag(header.showSeal, fb.header.showSeal),
+      logoPosition: oneOf(header.logoPosition, ALIGNS, fb.header.logoPosition),
+      logoHeightMm: finite(header.logoHeightMm, fb.header.logoHeightMm, 1, 80),
+      showInstitutionName: flag(header.showInstitutionName, fb.header.showInstitutionName),
+      institutionNameColor: oneOf(header.institutionNameColor, TOKENS, fb.header.institutionNameColor),
+      institutionNameSizePt: finite(header.institutionNameSizePt, fb.header.institutionNameSizePt, 1, 100),
+    },
+    title: {
+      text: text(title.text, fb.title.text),
+      sizePt: finite(title.sizePt, fb.title.sizePt, 1, 150),
+      align: oneOf(title.align, ALIGNS, fb.title.align),
+      color: oneOf(title.color, TOKENS, fb.title.color),
+      letterSpacing: finite(title.letterSpacing, fb.title.letterSpacing, 0, 30),
+      uppercase: flag(title.uppercase, fb.title.uppercase),
+    },
+    body: {
+      text: text(body.text, fb.body.text),
+      sizePt: finite(body.sizePt, fb.body.sizePt, 1, 60),
+      align: oneOf(body.align, ALIGNS, fb.body.align),
+      lineHeight: finite(body.lineHeight, fb.body.lineHeight, 0.8, 4),
+      nameSizePt: finite(body.nameSizePt, fb.body.nameSizePt, 1, 120),
+      nameColor: oneOf(body.nameColor, TOKENS, fb.body.nameColor),
+    },
+    fields: {
+      dateFormat: oneOf(fields.dateFormat, ["DD MMMM YYYY", "MMMM D, YYYY", "DD/MM/YYYY", "YYYY-MM-DD"], fb.fields.dateFormat),
+      showClassification: flag(fields.showClassification, fb.fields.showClassification),
+      showGraduationDate: flag(fields.showGraduationDate, fb.fields.showGraduationDate),
+      showStudentNumber: flag(fields.showStudentNumber, fb.fields.showStudentNumber),
+    },
+    signatories: {
+      ids: Array.isArray(signatories.ids) ? signatories.ids.filter((id): id is string => typeof id === "string") : [],
+      showTitles: flag(signatories.showTitles, fb.signatories.showTitles),
+      lineStyle: oneOf(signatories.lineStyle, ["line", "none"], fb.signatories.lineStyle),
+    },
+    footer: {
+      text: text(footer.text, fb.footer.text),
+      align: oneOf(footer.align, ALIGNS, fb.footer.align),
+      sizePt: finite(footer.sizePt, fb.footer.sizePt, 1, 40),
+    },
+    verification: {
+      qrPosition: oneOf(verification.qrPosition, ["bottom-left", "bottom-center", "bottom-right"], fb.verification.qrPosition),
+      qrSizeMm: finite(verification.qrSizeMm, fb.verification.qrSizeMm, 10, 80),
+    },
+  };
+}
+
+/** Certificate values with every field of the right type ("" or null when missing). Never throws. */
+export function normalizeRenderData(input: CertificateRenderData): CertificateRenderData {
+  const data = (input && typeof input === "object" ? input : {}) as Partial<Record<keyof CertificateRenderData, unknown>>;
+  const optional = (value: unknown) => (typeof value === "string" ? value : null);
+  return {
+    certificateUid: text(data.certificateUid, ""),
+    studentName: text(data.studentName, ""),
+    studentNumber: optional(data.studentNumber),
+    certificateType: text(data.certificateType, ""),
+    programName: text(data.programName, ""),
+    classification: optional(data.classification),
+    issueDate: optional(data.issueDate),
+    graduationDate: optional(data.graduationDate),
+    institutionName: text(data.institutionName, ""),
+  };
+}
+
+/** The snapshot with a normalised design and well-formed institution and signatory entries. Never throws. */
+export function normalizeSnapshot(input: RenderSnapshot): RenderSnapshot {
+  const snapshot = (input && typeof input === "object" ? input : {}) as Partial<RenderSnapshot>;
+  const institution = sectionOf(snapshot, "institution");
+  const template = sectionOf(snapshot, "template");
+  return {
+    snapshotVersion: 1,
+    template: { id: typeof template.id === "string" ? template.id : null, name: text(template.name, "") },
+    design: normalizeDesign(snapshot.design),
+    institution: {
+      name: text(institution.name, ""),
+      brandColor: typeof institution.brandColor === "string" ? institution.brandColor : null,
+      logoAssetId: typeof institution.logoAssetId === "string" ? institution.logoAssetId : null,
+      sealAssetId: typeof institution.sealAssetId === "string" ? institution.sealAssetId : null,
+    },
+    signatories: (Array.isArray(snapshot.signatories) ? snapshot.signatories : [])
+      .filter((signatory) => signatory && typeof signatory === "object")
+      .map((signatory) => ({
+        name: text(signatory.name, ""),
+        title: text(signatory.title, ""),
+        signatureAssetId: typeof signatory.signatureAssetId === "string" ? signatory.signatureAssetId : null,
+      })),
+  };
 }

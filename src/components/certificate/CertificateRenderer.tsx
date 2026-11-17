@@ -8,6 +8,8 @@ import {
   certificateAssetUrl,
   formatDesignDate,
   mm,
+  normalizeRenderData,
+  normalizeSnapshot,
   pageSizeMm,
   placeholderValues,
   resolvePlaceholders,
@@ -58,26 +60,33 @@ function borderDepthMm(border: RenderSnapshot["design"]["border"]) {
  * nodes only, and images only come from the API's asset route.
  */
 export function CertificateRenderer({
-  snapshot,
-  data,
+  snapshot: rawSnapshot,
+  data: rawData,
   onLayout,
 }: {
   snapshot: RenderSnapshot;
   data: CertificateRenderData;
   onLayout?: (layout: CertificateLayout) => void;
 }) {
+  // The renderer is total: whatever it is given, it draws from a normalised copy with safe defaults.
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const data = normalizeRenderData(rawData);
   const { design } = snapshot;
   const pageRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const onLayoutRef = useRef(onLayout);
   const lastReportRef = useRef("");
+  // Everything that can change the layout. The auto-fit only runs again when this changes.
+  const layoutSignature = JSON.stringify([snapshot, data]);
 
   useLayoutEffect(() => {
     onLayoutRef.current = onLayout;
   });
 
   // Auto-fit: shrink body and name text in steps until the content fits inside the border, down to 70%.
-  // Runs after every render, and again whenever a font or image finishes loading and changes the layout.
+  // A bounded procedure (at most seven steps, always starting from 100%), run once per design-and-data
+  // signature, and again when a font or image finishes loading and changes the layout. It reports to the
+  // parent only when the result actually changes.
   useLayoutEffect(() => {
     const page = pageRef.current;
     const content = contentRef.current;
@@ -107,7 +116,7 @@ export function CertificateRenderer({
       images.forEach((image) => image.removeEventListener("load", fit));
       document.fonts?.removeEventListener("loadingdone", fit);
     };
-  });
+  }, [layoutSignature]);
 
   const pageMm = pageSizeMm(design.page);
   const colors: Record<ColorToken, string> = {
@@ -139,6 +148,7 @@ export function CertificateRenderer({
   return (
     <div
       className={certificateFontClasses}
+      data-certificate-page=""
       ref={pageRef}
       style={{
         position: "relative",

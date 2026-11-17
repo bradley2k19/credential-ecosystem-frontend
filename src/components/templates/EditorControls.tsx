@@ -146,8 +146,11 @@ export function ChoiceField<T extends string>({ label, value, choices, onChange,
       <legend className="block text-sm font-medium text-slate-700">{label}</legend>
       <div className="mt-1 inline-flex flex-wrap rounded-md border border-slate-300 bg-white p-0.5" role="radiogroup">
         {choices.map((choice) => (
+          // relative: the visually hidden radio is absolutely positioned, and must be placed inside its label.
+          // Without it the radio was positioned against the page, made the page taller than the window, and
+          // focusing it on click scrolled the whole window away from the editor.
           <label
-            className={`cursor-pointer rounded px-3 py-1.5 text-sm font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-teal-300 ${choice.value === value ? "bg-teal-700 text-white" : "text-slate-700 hover:bg-slate-100"}`}
+            className={`relative cursor-pointer rounded px-3 py-1.5 text-sm font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-teal-300 ${choice.value === value ? "bg-teal-700 text-white" : "text-slate-700 hover:bg-slate-100"}`}
             key={choice.value}
           >
             <input checked={choice.value === value} className="sr-only" name={id} onChange={() => onChange(choice.value)} type="radio" value={choice.value} />
@@ -176,8 +179,9 @@ export function TokenField({ label, value, colors, onChange, messages = [] }: {
       <legend className="block text-sm font-medium text-slate-700">{label}</legend>
       <div className="mt-1 flex flex-wrap gap-2" role="radiogroup">
         {(Object.keys(TOKEN_LABELS) as ColorToken[]).map((token) => (
+          // relative keeps the visually hidden radio inside its label (see ChoiceField).
           <label
-            className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-teal-300 ${token === value ? "border-teal-700 bg-teal-50 font-semibold text-teal-900" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+            className={`relative flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-sm has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-teal-300 ${token === value ? "border-teal-700 bg-teal-50 font-semibold text-teal-900" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}
             key={token}
           >
             <input checked={token === value} className="sr-only" name={id} onChange={() => onChange(token)} type="radio" value={token} />

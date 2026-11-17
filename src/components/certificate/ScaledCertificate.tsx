@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CertificateRenderer, type CertificateLayout } from "@/components/certificate/CertificateRenderer";
-import { mm, pageSizeMm, type CertificateRenderData, type RenderSnapshot } from "@/lib/certificateDesign";
+import { mm, normalizeDesign, pageSizeMm, type CertificateRenderData, type RenderSnapshot } from "@/lib/certificateDesign";
+
+/** Width changes smaller than this (in px) are ignored, so a scrollbar or sub-pixel rounding cannot start a resize loop. */
+const MIN_WIDTH_CHANGE_PX = 1;
 
 /**
  * Shows the certificate renderer scaled down (never up) to the width of its container. The renderer itself
@@ -25,15 +28,28 @@ export function ScaledCertificate({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const observer = new ResizeObserver(([entry]) => setContainerWidth(entry.contentRect.width));
+    let frame = 0;
+    let lastWidth = 0;
+    // Width changes are applied on the next animation frame and only when they are real, so the preview can
+    // never feed back into its own size (scale changes, height changes, a scrollbar appears, width changes...).
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      if (Math.abs(width - lastWidth) < MIN_WIDTH_CHANGE_PX) return;
+      lastWidth = width;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setContainerWidth(width));
+    });
     observer.observe(container);
-    return () => observer.disconnect();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, []);
 
-  const page = pageSizeMm(snapshot.design.page);
+  const page = pageSizeMm(normalizeDesign(snapshot?.design).page);
   const pageWidth = mm(page.width);
   const pageHeight = mm(page.height);
-  const scale = containerWidth > 0 ? Math.min(1, containerWidth / pageWidth) : 0;
+  const scale = containerWidth > 0 ? Math.min(1, Math.round((containerWidth / pageWidth) * 1000) / 1000) : 0;
 
   return (
     <div className={`w-full ${className}`} ref={containerRef}>

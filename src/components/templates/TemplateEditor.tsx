@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useDeferredValue, useEffect, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { CertificateExportFeedback, useCertificateExport } from "@/components/certificate/CertificateExport";
+import { DrawingFailure, ErrorBoundary } from "@/components/ErrorBoundary";
 import type { CertificateLayout } from "@/components/certificate/CertificateRenderer";
 import { ScaledCertificate } from "@/components/certificate/ScaledCertificate";
 import { SectionContent, SettingsSection } from "@/components/templates/EditorSections";
@@ -24,7 +25,7 @@ import {
   type StudentRecord,
   type TemplateOptions,
 } from "@/lib/api";
-import { buildPreviewSnapshot, pageSizeMm, type TemplateDesign } from "@/lib/certificateDesign";
+import { buildPreviewSnapshot, normalizeDesign, pageSizeMm, type CertificateRenderData, type RenderSnapshot, type TemplateDesign } from "@/lib/certificateDesign";
 import { certificatePdfFileName } from "@/lib/certificatePdf";
 import {
   SECTIONS,
@@ -73,6 +74,8 @@ export function TemplateEditor({ templateId, starterId }: { templateId?: string;
   const { profile, error: profileError } = useInstitutionProfile();
   const [loaded, setLoaded] = useState<LoadedTemplate | null>(null);
   const [loadError, setLoadError] = useState("");
+  // Incremented by "Reload last saved version" after the editor failed to draw, to load everything again.
+  const [loadCount, setLoadCount] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -95,7 +98,13 @@ export function TemplateEditor({ templateId, starterId }: { templateId?: string;
       })
       .catch((requestError: unknown) => { if (active) setLoadError(errorText(requestError, "The template could not be loaded.")); });
     return () => { active = false; };
-  }, [templateId, starterId]);
+  }, [templateId, starterId, loadCount]);
+
+  function reloadSaved() {
+    setLoaded(null);
+    setLoadError("");
+    setLoadCount((count) => count + 1);
+  }
 
   const error = loadError || profileError;
   if (error) {
@@ -107,7 +116,20 @@ export function TemplateEditor({ templateId, starterId }: { templateId?: string;
     );
   }
   if (!loaded || !profile) return <p className="text-sm text-slate-600">Loading the template editor...</p>;
-  return <EditorWorkspace loaded={loaded} profile={profile} templateId={templateId} />;
+  return (
+    <ErrorBoundary
+      fallback={({ error: drawError }) => (
+        <DrawingFailure error={drawError} title="The editor could not be drawn">
+          <button className="rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800" onClick={reloadSaved} type="button">Reload last saved version</button>
+          <Link className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" href={TEMPLATES_PATH}>Back to templates</Link>
+        </DrawingFailure>
+      )}
+      name="template editor"
+      resetKeys={[loadCount]}
+    >
+      <EditorWorkspace key={loadCount} loaded={loaded} profile={profile} templateId={templateId} />
+    </ErrorBoundary>
+  );
 }
 
 function EditorWorkspace({ loaded, profile, templateId }: { loaded: LoadedTemplate; profile: InstitutionProfileDetails; templateId?: string }) {
@@ -253,14 +275,38 @@ function EditorWorkspace({ loaded, profile, templateId }: { loaded: LoadedTempla
       .catch((requestError: unknown) => setStudentsError(errorText(requestError, "Your students could not be loaded.")));
   }
 
-  // The preview follows a deferred copy of the design, so typing stays responsive while it redraws.
+  // The preview follows a deferred copy of the design, so typing and dragging stay responsive while it redraws.
+  // Its inputs are memoised, so the memoised preview pane only redraws when the deferred design or the
+  // preview data actually change, not on every keystroke elsewhere in the editor.
   const deferredRawDesign = useDeferredValue(design);
-  const deferredDesign = renderableDesign(deferredRawDesign, saved.design);
+  const deferredDesign = useMemo(() => renderableDesign(deferredRawDesign, saved.design), [deferredRawDesign, saved.design]);
   const templateRef = { id: templateId ?? null, name: name.trim() || "Untitled template" };
-  const previewSnapshot = buildPreviewSnapshot(deferredDesign, profile, signatories, templateRef);
+  const previewTemplate = useMemo(() => ({ id: templateId ?? null, name: "Preview" }), [templateId]);
+  const previewSnapshot = useMemo(() => buildPreviewSnapshot(deferredDesign, profile, signatories, previewTemplate), [deferredDesign, profile, signatories, previewTemplate]);
   const student = students?.find((item) => item.id === studentId);
-  const previewData = previewChoice === "student" && student ? studentRenderData(options, student) : sampleRenderData(options, previewChoice === "student" ? "long" : previewChoice);
-  const page = pageSizeMm(deferredDesign.page);
+  const previewData = useMemo(
+    () => (previewChoice === "student" && student ? studentRenderData(options, student) : sampleRenderData(options, previewChoice === "student" ? "long" : previewChoice)),
+    [options, previewChoice, student],
+  );
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+
+  /** "Reset preview": back to the default sample data, and draw again. */
+  function resetPreview() {
+    setPreviewChoice("long");
+    setLayout(null);
+    setPreviewAttempt((attempt) => attempt + 1);
+  }
+
+  /** "Reload last saved version": discard unsaved changes (after asking) and draw the saved design again. */
+  function reloadSavedVersion() {
+    if (isDirty && !window.confirm("Discard your unsaved changes and go back to the last saved version?")) return;
+    setName(saved.name);
+    setDesign(saved.design);
+    setUseAsDefault(saved.isDefault);
+    setServerProblems(null);
+    setAttemptedSave(false);
+    setPreviewAttempt((attempt) => attempt + 1);
+  }
 
   function handleDownload() {
     void exporter.runExport({
@@ -274,12 +320,13 @@ function EditorWorkspace({ loaded, profile, templateId }: { loaded: LoadedTempla
 
   return (
     <>
-      <div className="rounded-2xl bg-white p-6 text-center shadow-sm ring-1 ring-slate-200 lg:hidden">
+      <div className="rounded-2xl bg-white p-6 text-center shadow-sm ring-1 ring-slate-200 lg:hidden" data-testid="template-editor-narrow">
         <p className="font-semibold text-slate-900">Please use a larger screen to edit templates.</p>
         <Link className="mt-3 inline-block text-sm font-semibold text-teal-700 hover:text-teal-900" href={TEMPLATES_PATH}>&larr; Back to templates</Link>
       </div>
 
-      <div className="hidden h-[calc(100dvh-2rem)] min-h-[560px] flex-col gap-3 lg:flex">
+      {/* relative + overflow-hidden: nothing inside the editor can make the page taller than the window. */}
+      <div className="relative hidden h-[calc(100dvh-2rem)] min-h-[560px] flex-col gap-3 overflow-hidden lg:flex" data-testid="template-editor">
         <header className="rounded-xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <Link className="text-sm font-semibold text-teal-700 hover:text-teal-900" href={TEMPLATES_PATH}>&larr; Templates</Link>
@@ -338,7 +385,7 @@ function EditorWorkspace({ loaded, profile, templateId }: { loaded: LoadedTempla
         )}
 
         <div className="grid min-h-0 flex-1 grid-cols-[380px_minmax(0,1fr)] gap-4">
-          <aside aria-label="Template settings" className="min-h-0 overflow-y-auto rounded-xl bg-white shadow-sm ring-1 ring-slate-200">
+          <aside aria-label="Template settings" className="relative min-h-0 overflow-y-auto rounded-xl bg-white shadow-sm ring-1 ring-slate-200 [scrollbar-gutter:stable]">
             {summaryLines.length > 0 && (
               <div className="m-3 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-900" role="alert">
                 <p className="font-semibold">{serverProblems ? "The template could not be saved:" : "Fix these problems before saving:"}</p>
@@ -369,8 +416,8 @@ function EditorWorkspace({ loaded, profile, templateId }: { loaded: LoadedTempla
             </fieldset>
           </aside>
 
-          <section aria-label="Preview" className="min-h-0 overflow-y-auto rounded-xl bg-slate-200/70 p-4">
-            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-3 rounded-lg bg-white/95 px-3 py-2 shadow-sm ring-1 ring-slate-200 backdrop-blur">
+          <section aria-label="Preview" className="relative min-h-0 overflow-y-auto rounded-xl bg-slate-200/70 p-4 [scrollbar-gutter:stable]">
+            <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-3 rounded-lg bg-white px-3 py-2 shadow-sm ring-1 ring-slate-200">
               <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
                 Preview with
                 <select className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm" onChange={(event) => choosePreview(event.target.value as NameLength | "student")} value={previewChoice}>
@@ -397,15 +444,43 @@ function EditorWorkspace({ loaded, profile, templateId }: { loaded: LoadedTempla
               <span className="text-xs text-slate-500">Preview only, nothing here is saved.</span>
             </div>
             <FitStatus layout={layout} />
-            <div className="mx-auto" style={{ maxWidth: `calc((100dvh - 15rem) * ${page.width / page.height})` }}>
-              <ScaledCertificate data={previewData} onLayout={setLayout} snapshot={previewSnapshot} />
-            </div>
+            {/* Only the preview is inside this boundary: if drawing fails, the settings panel keeps working,
+                and any change to the design or the preview data tries to draw it again. */}
+            <ErrorBoundary
+              fallback={({ error: drawError }) => (
+                <DrawingFailure error={drawError} title="The preview could not be drawn">
+                  <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={resetPreview} type="button">Reset preview</button>
+                  <button className="rounded-md bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800" onClick={reloadSavedVersion} type="button">Reload last saved version</button>
+                </DrawingFailure>
+              )}
+              name="certificate preview"
+              resetKeys={[previewSnapshot, previewData, previewAttempt]}
+            >
+              <PreviewPane data={previewData} key={previewAttempt} onLayout={setLayout} snapshot={previewSnapshot} />
+            </ErrorBoundary>
           </section>
         </div>
       </div>
     </>
   );
 }
+
+/**
+ * The scaled certificate, fitted to the preview column's width and to the window's height. Memoised: it only
+ * redraws when its snapshot or data change (both are memoised by the editor).
+ */
+const PreviewPane = memo(function PreviewPane({ snapshot, data, onLayout }: {
+  snapshot: RenderSnapshot;
+  data: CertificateRenderData;
+  onLayout: (layout: CertificateLayout) => void;
+}) {
+  const page = pageSizeMm(normalizeDesign(snapshot.design).page);
+  return (
+    <div className="mx-auto" data-testid="certificate-preview" style={{ maxWidth: `calc((100dvh - 15rem) * ${page.width / page.height})` }}>
+      <ScaledCertificate data={data} onLayout={onLayout} snapshot={snapshot} />
+    </div>
+  );
+});
 
 /** The renderer's auto-fit result: nothing at 100%, the reduced size, or a warning when it still overflows. */
 function FitStatus({ layout }: { layout: CertificateLayout | null }) {

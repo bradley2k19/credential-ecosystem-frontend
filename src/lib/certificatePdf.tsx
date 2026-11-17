@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { CertificateRenderer } from "@/components/certificate/CertificateRenderer";
 import { certificateFontLoadFamily } from "@/lib/certificateFonts";
-import { designFontIds, mm, pageSizeMm, type CertificateRenderData, type RenderSnapshot } from "@/lib/certificateDesign";
+import { designFontIds, mm, normalizeSnapshot, pageSizeMm, type CertificateRenderData, type RenderSnapshot } from "@/lib/certificateDesign";
 
 const START_PIXEL_RATIO = 3;
 const MIN_PIXEL_RATIO = 1.5;
@@ -285,7 +285,8 @@ async function captureWithFallback(page: HTMLElement, snapshot: RenderSnapshot, 
 }
 
 /** The certificate as a PNG data URL, captured exactly as the PDF captures it. */
-export function captureCertificatePng({ snapshot, data, pixelRatio = START_PIXEL_RATIO }: { snapshot: RenderSnapshot; data: CertificateRenderData; pixelRatio?: number }) {
+export function captureCertificatePng({ snapshot: rawSnapshot, data, pixelRatio = START_PIXEL_RATIO }: { snapshot: RenderSnapshot; data: CertificateRenderData; pixelRatio?: number }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   return withOffscreenCertificate(snapshot, data, ({ page, missingImages }) => pageToPng(page, snapshot, pixelRatio, missingImages));
 }
 
@@ -293,7 +294,8 @@ export function captureCertificatePng({ snapshot, data, pixelRatio = START_PIXEL
  * Renders the certificate to a PDF blob: the captured PNG fills a page of the design's size and orientation.
  * Starts at pixel ratio 3 and lowers it if the file would exceed 6 MB.
  */
-export function renderCertificatePdf({ snapshot, data }: { snapshot: RenderSnapshot; data: CertificateRenderData }) {
+export function renderCertificatePdf({ snapshot: rawSnapshot, data }: { snapshot: RenderSnapshot; data: CertificateRenderData }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   return withOffscreenCertificate(snapshot, data, async ({ page, missingImages }) => {
     const pageMm = pageSizeMm(snapshot.design.page);
     let pixelRatio = START_PIXEL_RATIO;
