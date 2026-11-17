@@ -132,6 +132,8 @@ export interface CreateCertificateData {
   classification?: string;
   issueDate: string;
   graduationDate?: string;
+  /** One of the institution's active templates. Left out, the backend uses the default template, or Classic. */
+  templateId?: string;
 }
 
 export interface CertificateRecord {
@@ -147,6 +149,9 @@ export interface CertificateRecord {
   status: "ACTIVE" | "REVOKED" | string;
   revokedReason?: string | null;
   student: { fullName: string; studentNumber: string };
+  templateId?: string | null;
+  /** The template name frozen at issuance ("Classic (built-in)" for the built-in one); null before templates existed. */
+  templateName?: string | null;
   // Only included by the list endpoint: the confirmed (or latest) transaction of each type.
   onChain?: { issue: OnChainTransactionSummary | null; revoke: OnChainTransactionSummary | null };
 }

@@ -4,11 +4,23 @@ import Link from "next/link";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { CertificatePreviewDialog } from "@/components/certificate/CertificatePreviewDialog";
 import {
+  effectiveTemplateId,
+  IssuancePreview,
+  isTemplateProblem,
+  TemplatePicker,
+  TemplateProblem,
+  type IssuanceTemplates,
+} from "@/components/certificate/IssuanceTemplate";
+import { useInstitutionProfile } from "@/context/InstitutionProfileContext";
+import {
   createInstitutionCertificate,
   getInstitutionCertificateBlockchainStatus,
   getInstitutionCertificates,
   getInstitutionIssuerStatus,
   getInstitutionStudents,
+  getInstitutionTemplates,
+  getSignatories,
+  getTemplateOptions,
   revokeInstitutionCertificate,
   type BlockchainTxType,
   type CertificateRecord,
@@ -108,8 +120,16 @@ export function InstitutionCertificates() {
   const [rowAction, setRowAction] = useState<RowAction | null>(null);
   const [checkingStatusId, setCheckingStatusId] = useState("");
   const [previewCertificateId, setPreviewCertificateId] = useState("");
+  const { profile } = useInstitutionProfile();
+  // Templates for the issuance form: null while loading. chosenTemplateId is null until the user picks one,
+  // so the default template stays preselected; "" means the built-in Classic design (no templateId sent).
+  const [templateChoices, setTemplateChoices] = useState<IssuanceTemplates | null>(null);
+  const [templatesError, setTemplatesError] = useState("");
+  const [chosenTemplateId, setChosenTemplateId] = useState<string | null>(null);
+  const [templateProblem, setTemplateProblem] = useState<{ message: string; templateId: string } | null>(null);
 
   const linkedWallet = issuerStatus?.walletAddress;
+  const selectedTemplateId = templateChoices ? effectiveTemplateId(templateChoices.templates, chosenTemplateId) : "";
   const isBusy = busyPhases.includes(issuanceState) || (rowAction !== null && busyPhases.includes(rowAction.phase));
 
   async function refreshCertificates() {
@@ -154,6 +174,27 @@ export function InstitutionCertificates() {
     return () => { isCurrent = false; };
   }, []);
 
+  // Templates can change in another tab (for example after following "Edit the template"), so they are loaded
+  // again whenever this window regains focus. A failure here never blocks issuing.
+  useEffect(() => {
+    let isCurrent = true;
+    const loadTemplates = () => {
+      void Promise.all([getInstitutionTemplates(false), getTemplateOptions(), getSignatories()])
+        .then(([templateResponse, options, signatoryResponse]) => {
+          if (!isCurrent) return;
+          setTemplateChoices({ templates: templateResponse.templates, options, signatories: signatoryResponse.signatories });
+          setTemplatesError("");
+        })
+        .catch((error: unknown) => { if (isCurrent) setTemplatesError(errorMessage(error)); });
+    };
+    loadTemplates();
+    window.addEventListener("focus", loadTemplates);
+    return () => {
+      isCurrent = false;
+      window.removeEventListener("focus", loadTemplates);
+    };
+  }, []);
+
   function updateForm<K extends keyof CertificateForm>(field: K, value: CertificateForm[K]) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -167,12 +208,14 @@ export function InstitutionCertificates() {
     setIssuanceState("wallet-check");
     setIssuanceMessage(onChainPhaseMessages["wallet-check"]);
     setIssuanceError("");
+    setTemplateProblem(null);
     setCreatedCertificate(null);
     setTransactionHash("");
 
     let savedCertificate: CertificateRecord | null = null;
     let walletChecked = false;
     let submittedHash = "";
+    const submittedTemplateId = selectedTemplateId;
 
     try {
       // Check the wallet before saving so a wrong account never leaves a certificate without an on-chain record.
@@ -188,6 +231,7 @@ export function InstitutionCertificates() {
         classification: form.classification.trim() || undefined,
         issueDate: form.issueDate,
         graduationDate: form.graduationDate || undefined,
+        templateId: submittedTemplateId || undefined,
       });
       savedCertificate = certificate;
       setCreatedCertificate(certificate);
@@ -209,7 +253,10 @@ export function InstitutionCertificates() {
       setIssuanceState(isWalletRejection(error) ? "cancelled" : "failed");
       setIssuanceMessage("");
       if (savedCertificate) setIssuanceError(`${describeOnChainFailure(error, submittedHash)} ${ISSUE_INCOMPLETE_NOTE}`);
-      else if (walletChecked) setIssuanceError(errorMessage(error));
+      else if (walletChecked && isTemplateProblem(errorMessage(error))) {
+        // Refused before anything was saved: the form is kept as typed, with a link to fix the template.
+        setTemplateProblem({ message: errorMessage(error), templateId: submittedTemplateId });
+      } else if (walletChecked) setIssuanceError(errorMessage(error));
       else setIssuanceError(`${describeOnChainFailure(error, "")} No certificate was created.`);
     } finally {
       if (savedCertificate) await refreshCertificates();
@@ -334,6 +381,13 @@ export function InstitutionCertificates() {
                 {students.map((student) => <option key={student.id} value={student.id}>{student.fullName} ({student.studentNumber})</option>)}
               </select>
             </label>
+            <TemplatePicker
+              disabled={isBusy}
+              loadError={templatesError}
+              onChange={(templateId) => { setChosenTemplateId(templateId); setTemplateProblem(null); }}
+              templates={templateChoices?.templates ?? null}
+              value={selectedTemplateId}
+            />
             <FormField label="Certificate type" name="certificateType" value={form.certificateType} onChange={updateForm} />
             <FormField label="Program name" name="programName" value={form.programName} onChange={updateForm} />
             <FormField label="Classification (optional)" name="classification" value={form.classification} onChange={updateForm} required={false} />
@@ -345,6 +399,7 @@ export function InstitutionCertificates() {
           </form>
         )}
 
+        {templateProblem && <TemplateProblem message={templateProblem.message} templateId={templateProblem.templateId} />}
         <OnChainProgress
           error={issuanceError}
           extra={createdCertificate && issuanceError ? <span className="mt-1 block">Saved certificate ID: <span className="font-mono">{createdCertificate.certificateUid}</span></span> : null}
@@ -352,6 +407,16 @@ export function InstitutionCertificates() {
           message={issuanceMessage}
           transactionHash={transactionHash}
         />
+
+        {!isLoadingData && students.length > 0 && templateChoices && profile && (
+          <IssuancePreview
+            choices={templateChoices}
+            form={form}
+            profile={profile}
+            student={students.find((student) => student.id === form.studentId)}
+            templateId={selectedTemplateId}
+          />
+        )}
       </section>
 
       <section>
@@ -368,7 +433,7 @@ export function InstitutionCertificates() {
         ) : (
           <div className="mt-4 overflow-x-auto rounded-md border border-slate-200">
             <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
-              <thead className="bg-slate-50 text-xs uppercase text-slate-600"><tr><th className="px-4 py-3 font-semibold">Student</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Program</th><th className="px-4 py-3 font-semibold">Issue date</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold">On-chain</th><th className="px-4 py-3 font-semibold"><span className="sr-only">Actions</span></th></tr></thead>
+              <thead className="bg-slate-50 text-xs uppercase text-slate-600"><tr><th className="px-4 py-3 font-semibold">Student</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Program</th><th className="px-4 py-3 font-semibold">Issue date</th><th className="px-4 py-3 font-semibold">Template</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold">On-chain</th><th className="px-4 py-3 font-semibold"><span className="sr-only">Actions</span></th></tr></thead>
               <tbody className="divide-y divide-slate-200 bg-white">
                 {certificates.map((certificate) => {
                   const step = currentChainStep(certificate);
@@ -446,13 +511,18 @@ function CertificateRows({
         <td className="px-4 py-3 text-slate-700">{certificate.certificateType}</td>
         <td className="px-4 py-3 text-slate-700">{certificate.programName}</td>
         <td className="whitespace-nowrap px-4 py-3 text-slate-700">{formatDate(certificate.issueDate)}</td>
+        <td className="px-4 py-3 text-slate-700">
+          {/* The name frozen at issuance; certificates issued before templates existed have none. */}
+          {certificate.templateName ? certificate.templateName : <span className="text-slate-500">Not recorded</span>}
+        </td>
         <td className="whitespace-nowrap px-4 py-3"><span className={certificate.status === "ACTIVE" ? "font-semibold text-emerald-700" : "font-semibold text-slate-600"}>{certificate.status === "ACTIVE" ? "Active" : "Revoked"}</span></td>
         <td className="whitespace-nowrap px-4 py-3">
           <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${chainStateClasses[step.state]}`}>{stepLabel} {step.state}</span>
           {step.txHash && <a className="ml-2 text-xs font-semibold text-teal-700 underline" href={`${EXPLORER_TX_URL}${step.txHash}`} rel="noreferrer" target="_blank">Tx</a>}
         </td>
-        <td className="whitespace-nowrap px-4 py-3 text-right">
-          <div className="flex justify-end gap-2">
+        <td className="px-4 py-3 text-right">
+          {/* The buttons wrap onto a second line rather than pushing the table wider than the page. */}
+          <div className="flex flex-wrap justify-end gap-2 [&>button]:whitespace-nowrap">
             <button className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50" onClick={onPreview} type="button">Preview</button>
             {(step.state === "missing" || step.state === "failed") && (
               <button className="rounded-md border border-teal-600 px-3 py-1.5 text-xs font-semibold text-teal-800 hover:bg-teal-50 disabled:opacity-50" disabled={isBusy} onClick={onRetry} type="button">Retry on-chain step</button>
@@ -468,7 +538,7 @@ function CertificateRows({
       </tr>
       {action && (
         <tr className="bg-slate-50">
-          <td className="px-4 py-4" colSpan={7}>
+          <td className="px-4 py-4" colSpan={8}>
             {action.kind === "revoke" && action.phase === "form" ? (
               <form className="max-w-2xl space-y-3" noValidate onSubmit={onRevokeSubmit}>
                 <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm leading-6 text-red-900">
