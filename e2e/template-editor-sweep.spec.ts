@@ -54,9 +54,10 @@ async function signIn(page: Page) {
     return;
   }
   if (token && user) {
+    // The session is per tab, in sessionStorage (see src/lib/session.ts).
     await page.addInitScript(({ token: savedToken, user: savedUser }) => {
-      localStorage.setItem("credential-ecosystem-token", savedToken);
-      localStorage.setItem("credential-ecosystem-user", savedUser);
+      sessionStorage.setItem("credential-ecosystem-token", savedToken);
+      sessionStorage.setItem("credential-ecosystem-user", savedUser);
     }, { token, user });
     return;
   }

@@ -1,19 +1,28 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useSyncExternalStore, type ReactNode } from "react";
 import type { LoginResponse } from "@/lib/api";
+import {
+  clearSession,
+  isUserRole,
+  readSession,
+  removeLegacySharedSession,
+  saveSession,
+  subscribeSession,
+  type Session,
+  type SessionUser,
+  type UserRole,
+} from "@/lib/session";
 
-export type UserRole = "institution" | "student" | "employer" | "admin";
-export interface AuthUser { id: string; email: string; role: UserRole }
+export type { UserRole };
+export type AuthUser = SessionUser;
 interface AuthContextValue { user: AuthUser | null; token: string | null; isLoading: boolean; login: (response: LoginResponse) => void; logout: () => void }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
-const TOKEN_KEY = "credential-ecosystem-token";
-const USER_KEY = "credential-ecosystem-user";
 
-function isUserRole(role: unknown): role is UserRole {
-  return typeof role === "string" && ["institution", "student", "employer", "admin"].includes(role.toLowerCase());
-}
+// Before the browser has been read (server render and hydration) the session is not known yet.
+const NOT_READ = "not-read" as const;
+const notRead = () => NOT_READ;
 
 function userFromResponse(response: LoginResponse): AuthUser {
   const data = response.data ?? response;
@@ -25,29 +34,18 @@ function userFromResponse(response: LoginResponse): AuthUser {
   };
 }
 
-function userFromToken(token: string): AuthUser | null {
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1])) as Record<string, unknown>;
-    if (typeof payload.email !== "string" || !isUserRole(payload.role)) return null;
-    return { id: String(payload.id ?? payload.sub ?? ""), email: payload.email, role: payload.role };
-  } catch { return null; }
-}
-
+/**
+ * Provides this tab's session to the app. The session itself lives in the session module (per tab, in
+ * sessionStorage); this context only reflects it, and updates as soon as it is saved or cleared.
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const snapshot = useSyncExternalStore<Session | null | typeof NOT_READ>(subscribeSession, readSession, notRead);
+  const isLoading = snapshot === NOT_READ;
+  const session = isLoading ? null : snapshot;
 
+  // On app start: delete any session an older build left in localStorage, shared by every tab.
   useEffect(() => {
-    const storedToken = window.localStorage.getItem(TOKEN_KEY);
-    const storedUser = window.localStorage.getItem(USER_KEY);
-    // localStorage is only available after hydration, so restore the session here.
-    if (storedToken) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setToken(storedToken);
-      setUser(storedUser ? (JSON.parse(storedUser) as AuthUser) : userFromToken(storedToken));
-    }
-    setIsLoading(false);
+    removeLegacySharedSession();
   }, []);
 
   function handleLogin(response: LoginResponse) {
@@ -56,21 +54,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!nextToken) throw new Error("Login succeeded, but no session token was returned.");
     // Production would preferably use httpOnly cookies for stronger XSS protection;
     // that requires backend changes beyond this pass.
-    const nextUser = userFromResponse(response);
-    window.localStorage.setItem(TOKEN_KEY, nextToken);
-    window.localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
-    setToken(nextToken);
-    setUser(nextUser);
+    saveSession(nextToken, userFromResponse(response));
   }
 
+  /** Signs out this tab only; other tabs keep their own sessions. */
   function logout() {
-    window.localStorage.removeItem(TOKEN_KEY);
-    window.localStorage.removeItem(USER_KEY);
-    setToken(null);
-    setUser(null);
+    clearSession();
   }
 
-  return <AuthContext.Provider value={{ user, token, isLoading, login: handleLogin, logout }}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={{ user: session?.user ?? null, token: session?.token ?? null, isLoading, login: handleLogin, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {

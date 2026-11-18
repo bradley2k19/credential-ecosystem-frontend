@@ -1,6 +1,16 @@
 import type { RenderSnapshot, TemplateDesign } from "@/lib/certificateDesign";
+import { clearSession, getSessionToken, getSessionUser } from "@/lib/session";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "");
+
+/**
+ * A 401 on a request that sent this tab's token means the session is no longer valid (expired or invalid
+ * token): sign this tab out and go to the login page. A 403 (signed in, but not allowed) keeps the session.
+ */
+function endExpiredSession() {
+  clearSession();
+  if (typeof window !== "undefined" && window.location.pathname !== "/login") window.location.replace("/login");
+}
 
 export interface InstitutionRegistrationData {
   email: string;
@@ -45,10 +55,9 @@ async function request<T>(path: string, options: RequestInit, requiresAuth = fal
 
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
-  if (requiresAuth && typeof window !== "undefined") {
-    const token = window.localStorage.getItem("credential-ecosystem-token");
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-  }
+  // Read from this tab's session on every request; the token is never kept anywhere else.
+  const sentToken = requiresAuth ? getSessionToken() : null;
+  if (sentToken) headers.set("Authorization", `Bearer ${sentToken}`);
 
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -56,6 +65,7 @@ async function request<T>(path: string, options: RequestInit, requiresAuth = fal
   });
   const body = await response.json().catch(() => null);
 
+  if (response.status === 401 && sentToken) endExpiredSession();
   if (!response.ok && !acceptedStatuses.includes(response.status)) {
     const errorMessage =
       (body && typeof body.message === "string" && body.message) ||
@@ -300,15 +310,9 @@ export function getInstitutionCertificateBlockchainStatus(certificateId: string)
   }, true);
 }
 
-/** The stored token, only when the stored session belongs to an employer. Never throws. */
-function getStoredEmployerToken() {
-  if (typeof window === "undefined") return null;
-  try {
-    const user = JSON.parse(window.localStorage.getItem("credential-ecosystem-user") ?? "null") as { role?: string } | null;
-    return user?.role === "employer" ? window.localStorage.getItem("credential-ecosystem-token") : null;
-  } catch {
-    return null;
-  }
+/** This tab's token, only when this tab is signed in as an employer. Never throws. */
+function getEmployerSessionToken() {
+  return getSessionUser()?.role === "employer" ? getSessionToken() : null;
 }
 
 /**
@@ -316,7 +320,7 @@ function getStoredEmployerToken() {
  * attributed to them, and any other (or missing) session sends no token at all.
  */
 export function verifyCertificate(certificateUid: string, method: "qr" | "manual_id" = "manual_id") {
-  const token = getStoredEmployerToken();
+  const token = getEmployerSessionToken();
   return request<CertificateVerificationResult>(
     `/api/verify/${encodeURIComponent(certificateUid)}?method=${method}`,
     { method: "GET", headers: token ? { Authorization: `Bearer ${token}` } : undefined },
@@ -466,10 +470,11 @@ export async function downloadInstitutionCertificatesCsv(filters: CertificateExp
   if (filters.from) query.set("from", filters.from);
   if (filters.to) query.set("to", filters.to);
 
-  const token = typeof window !== "undefined" ? window.localStorage.getItem("credential-ecosystem-token") : null;
+  const token = getSessionToken();
   const response = await fetch(`${API_URL}/api/institutions/reports/certificates.csv?${query}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
+  if (response.status === 401 && token) endExpiredSession();
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new ApiError((body && typeof body.error === "string" && body.error) || "The export could not be downloaded. Please try again.", response.status);
