@@ -1,3 +1,4 @@
+import { VerifiedCertificate } from "@/components/certificate/VerifiedCertificate";
 import type { CertificateVerificationResult, VerificationResult as VerificationOutcome } from "@/lib/api";
 import { formatCertificateDate } from "@/lib/verification";
 
@@ -90,6 +91,12 @@ export function VerificationResult({ result, checkedUid }: { result: Certificate
               <Detail label="Institution" value={result.certificate.institutionName} />
             </dl>
           </div>
+        )}
+
+        {/* The certificate itself, only for valid and revoked results. Tampered, pending and not-found results
+            never show it (and get no placeholder), so untrusted or unconfirmed data is never drawn. */}
+        {(result.result === "valid" || result.result === "revoked") && result.render && (
+          <VerifiedCertificate render={result.render} revoked={result.result === "revoked"} />
         )}
       </div>
     </section>

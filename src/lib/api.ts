@@ -208,6 +208,25 @@ export interface CertificateVerificationResult {
     institutionName: string;
   };
   revokedReason?: string;
+  /** Only for valid and revoked results: what is needed to draw the certificate as it was issued. */
+  render?: VerificationRender;
+}
+
+export interface VerificationRender {
+  /** The snapshot frozen at issuance, or a computed fallback for certificates issued before templates. */
+  snapshot: RenderSnapshot;
+  snapshotIsFallback: boolean;
+  data: {
+    studentName: string;
+    studentNumber: string;
+    certificateType: string;
+    programName: string;
+    classification: string | null;
+    issueDate: string;
+    graduationDate: string | null;
+    certificateUid: string;
+    institutionName: string;
+  };
 }
 
 export interface EmployerVerificationRecord {
