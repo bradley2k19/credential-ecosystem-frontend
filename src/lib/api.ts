@@ -197,13 +197,16 @@ export type VerificationResult = "valid" | "revoked" | "not_found" | "tampered" 
 export interface CertificateVerificationResult {
   result: VerificationResult;
   message?: string;
+  /** Tampered results only: the identifier that was checked. They carry no certificate details at all. */
+  certificateUid?: string;
+  /** Valid, revoked and pending-chain results. Pending-chain results have no classification. */
   certificate?: {
     certificateUid: string;
     studentName: string;
     studentNumber: string;
     certificateType: string;
     programName: string;
-    classification: string | null;
+    classification?: string | null;
     issueDate: string;
     institutionName: string;
   };
@@ -213,7 +216,11 @@ export interface CertificateVerificationResult {
 }
 
 export interface VerificationRender {
-  /** The snapshot frozen at issuance, or a computed fallback for certificates issued before templates. */
+  /**
+   * The snapshot frozen at issuance, or a computed fallback for certificates issued before templates, without
+   * internal ids: the template has no id (read as null) and design.signatories.ids is empty. The renderer draws
+   * the signatories from `signatories`, so they are unaffected.
+   */
   snapshot: RenderSnapshot;
   snapshotIsFallback: boolean;
   data: {

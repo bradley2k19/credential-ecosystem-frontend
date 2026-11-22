@@ -11,7 +11,6 @@ const resultPresentation: Record<VerificationOutcome, {
   icon: string;
   card: string;
   banner: string;
-  detailsHeading?: string;
 }> = {
   valid: {
     verdict: "Valid",
@@ -44,7 +43,6 @@ const resultPresentation: Record<VerificationOutcome, {
     icon: "×",
     card: "border-red-700 bg-red-50 text-red-950",
     banner: "bg-red-700 text-white",
-    detailsHeading: "Details currently on file — these may have been altered and must not be relied on",
   },
   "pending-chain": {
     verdict: "Not yet confirmed",
@@ -79,9 +77,10 @@ export function VerificationResult({ result, checkedUid }: { result: Certificate
           </p>
         )}
 
-        {result.result !== "not_found" && result.certificate && (
+        {/* Tampered results show no details: the stored ones may have been altered. The service no longer sends
+            them, and any that arrive anyway are ignored; the warning and the checked ID above are what counts. */}
+        {result.result !== "not_found" && result.result !== "tampered" && result.certificate && (
           <div className="mt-5 border-t border-current/20 pt-4">
-            {presentation.detailsHeading && <p className="mb-3 text-sm font-semibold">{presentation.detailsHeading}</p>}
             <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
               <Detail label="Student" value={`${result.certificate.studentName} (${result.certificate.studentNumber})`} />
               <Detail label="Certificate type" value={result.certificate.certificateType} />
