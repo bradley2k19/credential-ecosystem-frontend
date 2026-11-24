@@ -77,6 +77,21 @@ export function VerificationResult({ result, checkedUid }: { result: Certificate
           </p>
         )}
 
+        {result.result === "revoked" && result.revocation && (
+          <div className="mt-3 space-y-2 text-sm" data-revocation-status="">
+            {result.revocation.statusMismatch && (
+              <p className="rounded-md border border-red-300 bg-red-50 px-4 py-3 font-semibold text-red-900" data-status-mismatch="">
+                The issuer&apos;s records and the blockchain disagree about this certificate. Treat it as revoked.
+              </p>
+            )}
+            <p className="font-medium">
+              {result.revocation.onChain
+                ? "Revocation confirmed on the blockchain."
+                : "Revocation recorded by the issuer. Blockchain confirmation is pending."}
+            </p>
+          </div>
+        )}
+
         {/* Tampered results show no details: the stored ones may have been altered. The service no longer sends
             them, and any that arrive anyway are ignored; the warning and the checked ID above are what counts. */}
         {result.result !== "not_found" && result.result !== "tampered" && result.certificate && (
@@ -106,12 +121,15 @@ function Detail({ label, value }: { label: string; value: string }) {
   return <div><dt className="text-xs font-semibold uppercase tracking-wide opacity-70">{label}</dt><dd className="mt-1 break-words font-medium">{value}</dd></div>;
 }
 
-/** The neutral "this is not a result" box for failed requests, so an outage is never read as a verdict. */
-export function VerificationRequestError({ message }: { message: string }) {
+/**
+ * The neutral "this is not a result" box for failed requests, so an outage is never read as a verdict. When the
+ * service refused because of too many requests, the message already says when to try again.
+ */
+export function VerificationRequestError({ message, rateLimited = false }: { message: string; rateLimited?: boolean }) {
   return (
-    <div className="rounded-md border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700" role="alert">
-      <p className="font-semibold text-slate-900">Verification could not be completed</p>
-      <p className="mt-1">{message} This is not a verification result — please try again shortly.</p>
+    <div className="rounded-md border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700" data-rate-limited={rateLimited ? "" : undefined} role="alert">
+      <p className="font-semibold text-slate-900">{rateLimited ? "Too many verification requests" : "Verification could not be completed"}</p>
+      <p className="mt-1">{message} {rateLimited ? "This is not a verification result." : "This is not a verification result — please try again shortly."}</p>
     </div>
   );
 }

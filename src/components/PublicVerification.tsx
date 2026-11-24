@@ -9,7 +9,7 @@ import { validateCertificateUid } from "@/lib/verification";
 type VerificationState =
   | { status: "loading" }
   | { status: "done"; result: CertificateVerificationResult }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; rateLimited: boolean };
 
 // Every call is recorded as a verification, so a remount (React strict mode in development) must reuse the
 // request already in flight instead of logging the same check twice.
@@ -41,6 +41,8 @@ export function PublicVerification({ certificateUid, method }: { certificateUid:
           status: "error",
           // fetch rejects with a TypeError when the service can't be reached at all.
           message: error instanceof ApiError ? error.message : "The verification service could not be reached. Check your internet connection.",
+          // Too many requests: the message says when to try again. Nothing is retried automatically.
+          rateLimited: error instanceof ApiError && error.isRateLimited,
         });
       });
     return () => { active = false; };
@@ -64,7 +66,7 @@ export function PublicVerification({ certificateUid, method }: { certificateUid:
         <p className="rounded-md bg-slate-50 px-4 py-6 text-center text-slate-600" role="status">Verifying certificate...</p>
       ) : state.status === "error" ? (
         <div className="space-y-3">
-          <VerificationRequestError message={state.message} />
+          <VerificationRequestError message={state.message} rateLimited={state.rateLimited} />
           <button className="rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800" onClick={handleRetry} type="button">Try again</button>
         </div>
       ) : (

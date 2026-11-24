@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { VerificationRequestError, VerificationResult } from "@/components/VerificationResult";
-import { verifyCertificate, type CertificateVerificationResult } from "@/lib/api";
+import { ApiError, verifyCertificate, type CertificateVerificationResult } from "@/lib/api";
 import { validateCertificateUid } from "@/lib/verification";
 
 export function EmployerVerifyPanel() {
@@ -10,13 +10,13 @@ export function EmployerVerifyPanel() {
   const [checkedUid, setCheckedUid] = useState("");
   const [result, setResult] = useState<CertificateVerificationResult | null>(null);
   const [validationError, setValidationError] = useState("");
-  const [requestError, setRequestError] = useState("");
+  const [requestError, setRequestError] = useState<{ message: string; rateLimited: boolean } | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
 
   function clearOutcome() {
     setResult(null);
     setValidationError("");
-    setRequestError("");
+    setRequestError(null);
   }
 
   function handleChange(value: string) {
@@ -42,7 +42,11 @@ export function EmployerVerifyPanel() {
       setCheckedUid(uid);
       setResult(response);
     } catch (verificationError) {
-      setRequestError(verificationError instanceof Error ? verificationError.message : "Verification could not be completed.");
+      setRequestError({
+        message: verificationError instanceof Error ? verificationError.message : "Verification could not be completed.",
+        // Too many requests: the message says when to try again. Nothing is retried automatically.
+        rateLimited: verificationError instanceof ApiError && verificationError.isRateLimited,
+      });
     } finally {
       setIsVerifying(false);
     }
@@ -77,7 +81,7 @@ export function EmployerVerifyPanel() {
         {validationError && <p className="text-sm text-red-700" id="certificate-uid-error" role="alert">{validationError}</p>}
       </form>
 
-      {requestError && <VerificationRequestError message={requestError} />}
+      {requestError && <VerificationRequestError message={requestError.message} rateLimited={requestError.rateLimited} />}
       {result && <VerificationResult checkedUid={checkedUid} result={result} />}
     </section>
   );

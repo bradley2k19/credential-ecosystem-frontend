@@ -66,6 +66,12 @@ async function request<T>(path: string, options: RequestInit, requiresAuth = fal
   const body = await response.json().catch(() => null);
 
   if (response.status === 401 && sentToken) endExpiredSession();
+  // Too many requests: say when to try again. Never retried automatically.
+  if (response.status === 429) {
+    const retryAfterSeconds = retryAfterOf(body, response);
+    const serverMessage = body && typeof body.error === "string" ? body.error : null;
+    throw new ApiError(rateLimitMessage(serverMessage, retryAfterSeconds), 429, retryAfterSeconds);
+  }
   if (!response.ok && !acceptedStatuses.includes(response.status)) {
     const errorMessage =
       (body && typeof body.message === "string" && body.message) ||
@@ -75,6 +81,29 @@ async function request<T>(path: string, options: RequestInit, requiresAuth = fal
     throw new ApiError(errorMessage, response.status);
   }
   return body as T;
+}
+
+/** Seconds until a rate-limited request may be made again: from the body, else the Retry-After header. */
+function retryAfterOf(body: unknown, response: Response) {
+  const fromBody = body && typeof body === "object" ? (body as { retryAfterSeconds?: unknown }).retryAfterSeconds : undefined;
+  if (typeof fromBody === "number" && Number.isFinite(fromBody) && fromBody > 0) return Math.ceil(fromBody);
+  const fromHeader = Number.parseInt(response.headers.get("Retry-After") ?? "", 10);
+  return Number.isFinite(fromHeader) && fromHeader > 0 ? fromHeader : null;
+}
+
+/** A wait as people say it: "about a minute", "about 15 minutes", "about an hour", "about 2 hours". */
+export function describeWait(seconds: number) {
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  if (minutes === 1) return "about a minute";
+  if (minutes < 60) return `about ${minutes} minutes`;
+  const hours = Math.ceil(minutes / 60);
+  return hours === 1 ? "about an hour" : `about ${hours} hours`;
+}
+
+/** "Too many attempts. Please try again in about 15 minutes.": the server's first sentence, then the wait. */
+function rateLimitMessage(serverMessage: string | null, retryAfterSeconds: number | null) {
+  const headline = serverMessage?.match(/^[^.]*\./)?.[0] ?? "Too many attempts.";
+  return retryAfterSeconds ? `${headline} Please try again in ${describeWait(retryAfterSeconds)}.` : `${headline} Please try again later.`;
 }
 
 export function registerInstitution(data: InstitutionRegistrationData) {
@@ -210,7 +239,12 @@ export interface CertificateVerificationResult {
     issueDate: string;
     institutionName: string;
   };
-  revokedReason?: string;
+  revokedReason?: string | null;
+  /**
+   * Revoked results only: whether the revocation is recorded on the blockchain, and whether the blockchain says
+   * revoked while the issuer's records say active (then the certificate is treated as revoked).
+   */
+  revocation?: { onChain: boolean; statusMismatch: boolean };
   /** Only for valid and revoked results: what is needed to draw the certificate as it was issued. */
   render?: VerificationRender;
 }
@@ -255,9 +289,18 @@ export interface EmployerVerificationHistoryResponse {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(
+    message: string,
+    public readonly status: number,
+    /** For 429 (too many requests): seconds until trying again is allowed, when the server said. */
+    public readonly retryAfterSeconds: number | null = null,
+  ) {
     super(message);
     this.name = "ApiError";
+  }
+
+  get isRateLimited() {
+    return this.status === 429;
   }
 }
 
@@ -554,15 +597,32 @@ export interface AdminRoleChangeResponse {
   message?: string;
 }
 
-export type AdminAuditAction = "INSTITUTION_VERIFIED" | "INSTITUTION_UNVERIFIED" | "ISSUER_GRANTED" | "ISSUER_REVOKED";
+export type AdminAuditAction =
+  | "INSTITUTION_VERIFIED"
+  | "INSTITUTION_UNVERIFIED"
+  | "ISSUER_GRANTED"
+  | "ISSUER_REVOKED"
+  | "VERIFICATION_STATUS_MISMATCH";
 
 export interface AdminAuditLog {
   id: string;
   createdAt: string;
   adminEmail: string | null;
+  /** True for entries the system wrote itself (no administrator), such as a status mismatch found by verification. */
+  system?: boolean;
   action: AdminAuditAction | string;
-  institution: { id: string | null; name: string | null };
-  details: { transactionHash?: string | null; outcome?: string; failure?: string; [key: string]: unknown };
+  institution: { id: string | null; name: string | null } | null;
+  /** System entries about a certificate. */
+  certificate?: { id: string | null; uid: string | null };
+  details: {
+    transactionHash?: string | null;
+    outcome?: string;
+    failure?: string;
+    certificateUid?: string | null;
+    databaseStatus?: string | null;
+    onChainRevoked?: boolean | null;
+    [key: string]: unknown;
+  };
 }
 
 export interface AdminAuditLogListResponse {

@@ -1,5 +1,6 @@
 "use client";
 
+import { ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getAdminAuditLogs, type AdminAuditLog as AdminAuditLogEntry } from "@/lib/api";
 import { EXPLORER_TX_URL } from "@/lib/onChain";
@@ -12,6 +13,9 @@ const actionLabels: Record<string, string> = {
   INSTITUTION_UNVERIFIED: "Institution unverified",
   ISSUER_GRANTED: "Issuer access granted",
   ISSUER_REVOKED: "Issuer access revoked",
+  // Written by the system, not an administrator: verification found the blockchain saying revoked while the
+  // database says active.
+  VERIFICATION_STATUS_MISMATCH: "Security: status mismatch",
 };
 
 const outcomeClasses: Record<string, string> = {
@@ -64,7 +68,7 @@ export function AdminAuditLog() {
       <div>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-700">Platform administration</p>
         <h1 className="mt-2 text-3xl font-semibold text-slate-950">Audit log</h1>
-        <p className="mt-2 text-slate-600">Every administrator action, most recent first.</p>
+        <p className="mt-2 text-slate-600">Every administrator action and security alert, most recent first.</p>
       </div>
 
       <label className="mt-6 block max-w-xs text-sm font-medium text-slate-700" htmlFor="audit-action">
@@ -80,7 +84,7 @@ export function AdminAuditLog() {
         <p className="mt-6 text-sm text-slate-600">Loading audit log...</p>
       ) : error ? null : entries.length === 0 ? (
         <p className="mt-6 rounded-md bg-slate-50 p-5 text-sm text-slate-600 ring-1 ring-slate-200">
-          {actionFilter ? "No actions match this filter." : "No admin actions recorded yet."}
+          {actionFilter ? "No actions match this filter." : "No admin actions or security alerts recorded yet."}
         </p>
       ) : (
         <>
@@ -96,12 +100,26 @@ export function AdminAuditLog() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {entries.map((entry) => (
+                {entries.map((entry) => entry.system ? (
+                  // A security alert the system recorded itself: set apart from administrator actions.
+                  <tr className="bg-red-50 align-top" data-security-entry="" key={entry.id}>
+                    <td className="whitespace-nowrap border-l-4 border-red-600 px-4 py-3 text-red-900">{formatDateTime(entry.createdAt)}</td>
+                    <td className="px-4 py-3 italic text-red-900">System</td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-red-600 px-2.5 py-1 text-xs font-semibold text-white">
+                        <ShieldAlert aria-hidden="true" className="size-3.5" />
+                        {actionLabels[entry.action] ?? entry.action}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-red-950">{entry.institution?.name ?? "—"}</td>
+                    <td className="px-4 py-3 text-red-950"><SecurityDetails entry={entry} /></td>
+                  </tr>
+                ) : (
                   <tr className="align-top" key={entry.id}>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-600">{formatDateTime(entry.createdAt)}</td>
                     <td className="break-all px-4 py-3 text-slate-700">{entry.adminEmail ?? "Unknown"}</td>
                     <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{actionLabels[entry.action] ?? entry.action}</td>
-                    <td className="px-4 py-3 text-slate-700">{entry.institution.name ?? "Unknown institution"}</td>
+                    <td className="px-4 py-3 text-slate-700">{entry.institution?.name ?? "Unknown institution"}</td>
                     <td className="px-4 py-3 text-slate-700"><AuditDetails entry={entry} /></td>
                   </tr>
                 ))}
@@ -118,6 +136,25 @@ export function AdminAuditLog() {
         </>
       )}
     </section>
+  );
+}
+
+/** A status mismatch: which certificate, and what the database and the blockchain each say. */
+function SecurityDetails({ entry }: { entry: AdminAuditLogEntry }) {
+  const certificateUid = entry.certificate?.uid ?? entry.details.certificateUid ?? null;
+  const databaseStatus = typeof entry.details.databaseStatus === "string" ? entry.details.databaseStatus : null;
+  return (
+    <div className="space-y-1 text-xs">
+      <p>
+        <span className="font-semibold">Certificate </span>
+        <span className="break-all font-mono">{certificateUid ?? "unknown"}</span>
+      </p>
+      <p>
+        Database: {databaseStatus ? databaseStatus.charAt(0) + databaseStatus.slice(1).toLowerCase() : "unknown"}
+        {" · "}
+        Blockchain: {entry.details.onChainRevoked ? "Revoked" : "unknown"}
+      </p>
+    </div>
   );
 }
 

@@ -37,7 +37,7 @@ export function LoginForm() {
     <form className="space-y-5" onSubmit={handleSubmit}>
       <Field label="Email" name="email" type="email" value={email} onChange={setEmail} />
       <Field label="Password" name="password" type="password" value={password} onChange={setPassword} />
-      {error && <p className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>}
+      {error && <p className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{error}</p>}
       <button className="button-primary" disabled={isSubmitting} type="submit">{isSubmitting ? "Signing in..." : "Sign in"}</button>
     </form>
     <p className="mt-6 text-center text-sm text-slate-600">Need an account? <Link className="font-semibold text-teal-700 hover:text-teal-900" href="/register/institution">Register an institution</Link> or <Link className="font-semibold text-teal-700 hover:text-teal-900" href="/register/employer">employer</Link>.</p>
