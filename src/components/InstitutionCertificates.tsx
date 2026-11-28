@@ -12,10 +12,13 @@ import {
   type IssuanceTemplates,
 } from "@/components/certificate/IssuanceTemplate";
 import { useInstitutionProfile } from "@/context/InstitutionProfileContext";
+import { CorrectionStageBadge } from "@/components/corrections/CorrectionStageBadge";
 import {
   createInstitutionCertificate,
+  getInstitutionCertificate,
   getInstitutionCertificateBlockchainStatus,
   getInstitutionCertificates,
+  getInstitutionCorrectionRequest,
   getInstitutionIssuerStatus,
   getInstitutionStudents,
   getInstitutionTemplates,
@@ -24,10 +27,13 @@ import {
   revokeInstitutionCertificate,
   type BlockchainTxType,
   type CertificateRecord,
+  type InstitutionCertificateDetail,
+  type InstitutionCorrectionRequest,
   type IssuerStatus,
   type OnChainTransactionSummary,
   type StudentRecord,
 } from "@/lib/api";
+import { pendingCorrections } from "@/lib/liveCounts";
 import {
   describeOnChainFailure,
   errorMessage,
@@ -103,7 +109,27 @@ function outcomeText(outcome: OnChainOutcome, txType: BlockchainTxType) {
   return { message: "", error: `The transaction is still pending after several checks. Use “Check status” in the list later. ${txType === "REVOKE" ? "The certificate is already revoked in the database." : "The certificate is saved in the database."}` };
 }
 
-export function InstitutionCertificates() {
+/** The correction being reissued (opened with ?correct=<requestId>): the request and its original certificate. */
+interface CorrectionContext {
+  request: InstitutionCorrectionRequest;
+  original: InstitutionCertificateDetail;
+}
+
+const replacementReason = (newUid: string) => `Replaced by corrected certificate ${newUid} after a correction request`;
+
+/** The correction request, its original certificate, and that student's certificates (to list the original). */
+async function fetchCorrection(requestId: string) {
+  const request = await getInstitutionCorrectionRequest(requestId);
+  const original = await getInstitutionCertificate(request.certificate.id);
+  const forStudent = original.studentId ? (await getInstitutionCertificates({ studentId: original.studentId })).certificates : [];
+  return { request, original, forStudent };
+}
+
+/**
+ * `correctRequestId` opens the page for reissuing an approved correction request (the form prefilled from the
+ * original certificate, the student locked); `initialPreviewId` opens the preview of one certificate.
+ */
+export function InstitutionCertificates({ correctRequestId, initialPreviewId }: { correctRequestId?: string; initialPreviewId?: string } = {}) {
   const [issuerStatus, setIssuerStatus] = useState<IssuerStatus | null>(null);
   const [isCheckingApproval, setIsCheckingApproval] = useState(true);
   const [approvalError, setApprovalError] = useState("");
@@ -119,7 +145,11 @@ export function InstitutionCertificates() {
   const [transactionHash, setTransactionHash] = useState("");
   const [rowAction, setRowAction] = useState<RowAction | null>(null);
   const [checkingStatusId, setCheckingStatusId] = useState("");
-  const [previewCertificateId, setPreviewCertificateId] = useState("");
+  const [previewCertificateId, setPreviewCertificateId] = useState(initialPreviewId ?? "");
+  const [correction, setCorrection] = useState<CorrectionContext | null>(null);
+  const [correctionError, setCorrectionError] = useState("");
+  // The replacement issued during this visit, until the request reflects it.
+  const [replacement, setReplacement] = useState<CertificateRecord | null>(null);
   const { profile } = useInstitutionProfile();
   // Templates for the issuance form: null while loading. chosenTemplateId is null until the user picks one,
   // so the default template stays preselected; "" means the built-in Classic design (no templateId sent).
@@ -131,6 +161,48 @@ export function InstitutionCertificates() {
   const linkedWallet = issuerStatus?.walletAddress;
   const selectedTemplateId = templateChoices ? effectiveTemplateId(templateChoices.templates, chosenTemplateId) : "";
   const isBusy = busyPhases.includes(issuanceState) || (rowAction !== null && busyPhases.includes(rowAction.phase));
+  // Reissuing: only an approved request without a replacement yet. The student is then fixed.
+  const isReissuing = correction?.request.stage === "approved_awaiting_reissue" && !replacement;
+
+  /** Shows a loaded correction; with `prefill`, fills the form from the original certificate (approved requests). */
+  function applyCorrection({ request, original, forStudent }: Awaited<ReturnType<typeof fetchCorrection>>, prefill: boolean) {
+    setCorrection({ request, original });
+    setCorrectionError("");
+    if (prefill && request.stage === "approved_awaiting_reissue") {
+      setForm({
+        studentId: original.studentId ?? "",
+        certificateType: original.certificateType,
+        programName: original.programName,
+        classification: original.classification ?? "",
+        issueDate: original.issueDate.slice(0, 10),
+        graduationDate: original.graduationDate ? original.graduationDate.slice(0, 10) : "",
+      });
+      setChosenTemplateId(original.templateId ?? "");
+    }
+    // The original may be older than the newest 100: make sure its row (and so its revoke panel) is listed.
+    setCertificates((current) => [...current, ...forStudent.filter((item) => !current.some((existing) => existing.id === item.id))]);
+  }
+
+  /** Reloads the correction after the replacement is issued or the original revoked. */
+  async function loadCorrection(requestId: string, prefill: boolean) {
+    try {
+      applyCorrection(await fetchCorrection(requestId), prefill);
+    } catch (error) {
+      setCorrectionError(errorMessage(error));
+    }
+  }
+
+  useEffect(() => {
+    // Waits for the issuer check (and the first load), so the prefilled form is not overwritten by it.
+    if (!correctRequestId || isCheckingApproval || !issuerStatus?.isIssuer) return;
+    let active = true;
+    void fetchCorrection(correctRequestId).then(
+      (loaded) => { if (active) applyCorrection(loaded, true); },
+      (error: unknown) => { if (active) setCorrectionError(errorMessage(error)); },
+    );
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request, after the issuer check
+  }, [correctRequestId, isCheckingApproval]);
 
   async function refreshCertificates() {
     setListError("");
@@ -216,6 +288,7 @@ export function InstitutionCertificates() {
     let walletChecked = false;
     let submittedHash = "";
     const submittedTemplateId = selectedTemplateId;
+    const submittedCorrectionId = isReissuing ? correction?.request.id : undefined;
 
     try {
       // Check the wallet before saving so a wrong account never leaves a certificate without an on-chain record.
@@ -232,9 +305,11 @@ export function InstitutionCertificates() {
         issueDate: form.issueDate,
         graduationDate: form.graduationDate || undefined,
         templateId: submittedTemplateId || undefined,
+        correctionRequestId: submittedCorrectionId,
       });
       savedCertificate = certificate;
       setCreatedCertificate(certificate);
+      if (submittedCorrectionId) setReplacement(certificate);
       setCertificates((current) => [certificate, ...current.filter((item) => item.id !== certificate.id)]);
       setForm(emptyCertificateForm());
 
@@ -260,6 +335,8 @@ export function InstitutionCertificates() {
       else setIssuanceError(`${describeOnChainFailure(error, "")} No certificate was created.`);
     } finally {
       if (savedCertificate) await refreshCertificates();
+      // The request now has its replacement: show the next step (revoking the original).
+      if (savedCertificate && submittedCorrectionId) await loadCorrection(submittedCorrectionId, false);
     }
   }
 
@@ -287,8 +364,19 @@ export function InstitutionCertificates() {
     }
   }
 
-  function openRowAction(certificateId: string, kind: RowAction["kind"]) {
-    setRowAction({ certificateId, kind, phase: "form", reason: "", reasonError: "", message: "", error: "", transactionHash: "" });
+  function openRowAction(certificateId: string, kind: RowAction["kind"], reason = "") {
+    setRowAction({ certificateId, kind, phase: "form", reason, reasonError: "", message: "", error: "", transactionHash: "" });
+  }
+
+  /** The prompt after a replacement: opens the usual revoke panel on the original, with the reason filled in. */
+  function revokeOriginal() {
+    if (!correction) return;
+    const newUid = replacement?.certificateUid ?? correction.request.replacement?.certificateUid ?? "";
+    openRowAction(correction.original.id, "revoke", replacementReason(newUid));
+    window.requestAnimationFrame(() => {
+      document.getElementById(`certificate-row-${correction.original.id}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      document.getElementById(`revoke-reason-${correction.original.id}`)?.focus();
+    });
   }
 
   async function handleRevoke(event: FormEvent<HTMLFormElement>, certificate: CertificateRecord) {
@@ -310,6 +398,11 @@ export function InstitutionCertificates() {
 
     const updated = { ...certificate, ...revoked, onChain: certificate.onChain };
     setCertificates((current) => current.map((item) => (item.id === certificate.id ? updated : item)));
+    // Revoking the original of a correction completes it.
+    if (correction && correction.original.id === certificate.id) {
+      void loadCorrection(correction.request.id, false);
+      void pendingCorrections.refresh();
+    }
 
     // The contract reverts when revoking a certificate it has never recorded, so don't send a transaction that can't succeed.
     if (chainState(certificate.onChain?.issue) !== "confirmed") {
@@ -363,8 +456,21 @@ export function InstitutionCertificates() {
   return (
     <div className="space-y-8">
       <section className="rounded-md border border-slate-200 p-5 sm:p-6">
-        <h2 className="text-xl font-semibold text-slate-950">Issue a certificate</h2>
+        <h2 className="text-xl font-semibold text-slate-950">{isReissuing ? "Issue the corrected certificate" : "Issue a certificate"}</h2>
         <p className="mt-2 text-sm text-slate-600">The certificate is saved first, then submitted to Polygon Amoy from your connected wallet.</p>
+
+        {correctRequestId && correctionError && (
+          <p className="mt-4 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">The correction request could not be loaded: {correctionError}</p>
+        )}
+        {correction && (
+          <CorrectionBanner
+            correction={correction}
+            isRevoking={rowAction?.certificateId === correction.original.id}
+            onRevokeOriginal={revokeOriginal}
+            replacement={replacement}
+            replacementConfirmed={issuanceState === "confirmed"}
+          />
+        )}
 
         {isLoadingData ? <p className="mt-5 text-sm text-slate-600">Loading students and certificates...</p> : students.length === 0 ? (
           <p className="mt-5 rounded-md bg-slate-50 p-4 text-sm text-slate-600">Add a student before issuing a certificate. <Link className="font-semibold text-teal-700 underline" href="/institution/students">Go to Students</Link></p>
@@ -372,14 +478,19 @@ export function InstitutionCertificates() {
           <form className="mt-5 grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit}>
             <label className="block text-sm font-medium text-slate-700 sm:col-span-2" htmlFor="certificate-student">
               Student
-              <select className="field" id="certificate-student" onChange={(event) => {
+              <select className="field disabled:bg-slate-50 disabled:text-slate-600" disabled={isReissuing} id="certificate-student" onChange={(event) => {
                 const student = students.find((item) => item.id === event.target.value);
                 updateForm("studentId", event.target.value);
                 if (student) updateForm("programName", student.programName);
               }} required value={form.studentId}>
                 <option value="">Select a student</option>
                 {students.map((student) => <option key={student.id} value={student.id}>{student.fullName} ({student.studentNumber})</option>)}
+                {/* The corrected student may not be on the first page of the list. */}
+                {isReissuing && correction?.original.studentId && !students.some((student) => student.id === correction.original.studentId) && (
+                  <option value={correction.original.studentId}>{correction.request.student.fullName} ({correction.request.student.studentNumber})</option>
+                )}
               </select>
+              {isReissuing && <span className="mt-1 block text-xs font-normal text-slate-500">A corrected certificate goes to the same student as the original.</span>}
             </label>
             <TemplatePicker
               disabled={isBusy}
@@ -506,7 +617,7 @@ function CertificateRows({
 
   return (
     <>
-      <tr>
+      <tr id={`certificate-row-${certificate.id}`}>
         <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{certificate.student.fullName}<span className="block text-xs font-normal text-slate-500">{certificate.student.studentNumber}</span></td>
         <td className="px-4 py-3 text-slate-700">{certificate.certificateType}</td>
         <td className="px-4 py-3 text-slate-700">{certificate.programName}</td>
@@ -576,6 +687,63 @@ function CertificateRows({
         </tr>
       )}
     </>
+  );
+}
+
+/**
+ * Shown while correcting a certificate: which certificate is being corrected, then (once the replacement exists)
+ * the prompt to revoke the original, and finally that the correction is complete.
+ */
+function CorrectionBanner({ correction, replacement, replacementConfirmed, isRevoking, onRevokeOriginal }: {
+  correction: CorrectionContext;
+  replacement: CertificateRecord | null;
+  replacementConfirmed: boolean;
+  isRevoking: boolean;
+  onRevokeOriginal: () => void;
+}) {
+  const { request, original } = correction;
+  const replacementUid = replacement?.certificateUid ?? request.replacement?.certificateUid;
+  const returnTo = `/institution/certificates?correct=${encodeURIComponent(request.id)}`;
+  const editStudentHref = `/institution/students?edit=${encodeURIComponent(original.studentId ?? "")}&returnTo=${encodeURIComponent(returnTo)}`;
+  const needsRevocation = Boolean(replacementUid) && original.status === "ACTIVE";
+
+  return (
+    <div className="mt-4 space-y-3 rounded-md border border-teal-300 bg-teal-50 px-4 py-3 text-sm text-teal-950" data-correction-banner={request.stage}>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="font-semibold">Correcting certificate <span className="break-all font-mono text-xs">{original.certificateUid}</span></p>
+        <CorrectionStageBadge audience="institution" stage={request.stage} />
+      </div>
+      <p>
+        For {request.student.fullName} ({request.student.studentNumber}). The student asked: <span className="italic">&ldquo;{request.requestDetails}&rdquo;</span>
+      </p>
+
+      {request.stage === "approved_awaiting_reissue" && !replacement && (
+        <p>
+          The form below is filled in from the original certificate. If the student&apos;s name is what is wrong,{" "}
+          <Link className="font-semibold underline" href={editStudentHref}>edit student details first</Link>: certificates take the student&apos;s current details when issued.
+        </p>
+      )}
+      {(request.stage === "pending" || request.stage === "rejected") && (
+        <p className="font-semibold">This request is not approved, so no corrected certificate can be issued for it.</p>
+      )}
+
+      {needsRevocation && (
+        <div className="space-y-2 rounded-md border border-amber-400 bg-amber-50 p-3 text-amber-950" data-revoke-original-prompt="">
+          <p className="text-base font-semibold">Now revoke the original certificate</p>
+          <p>
+            The corrected certificate <span className="break-all font-mono text-xs">{replacementUid}</span> is issued.
+            {replacement && !replacementConfirmed ? " Its on-chain step is not confirmed yet; you may want to finish that first." : ""}{" "}
+            Revoke the original so that only the corrected certificate is valid. You confirm and sign the revocation as usual.
+          </p>
+          <button className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:opacity-60" disabled={isRevoking} onClick={onRevokeOriginal} type="button">
+            {isRevoking ? "Revoke panel open below" : "Revoke the original certificate"}
+          </button>
+        </div>
+      )}
+      {request.stage === "completed" && <p className="rounded-md bg-emerald-100 px-3 py-2 font-semibold text-emerald-900">Correction completed: the corrected certificate is issued and the original is revoked.</p>}
+
+      <p><Link className="font-semibold underline" href={`/institution/corrections?request=${encodeURIComponent(request.id)}`}>Back to the correction request</Link></p>
+    </div>
   );
 }
 

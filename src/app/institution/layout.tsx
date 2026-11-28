@@ -1,21 +1,27 @@
 "use client";
 
-import { Award, Building2, ChartColumn, GraduationCap, LayoutDashboard, LayoutTemplate, ShieldCheck } from "lucide-react";
+import { Award, Bell, Building2, ChartColumn, FilePenLine, GraduationCap, LayoutDashboard, LayoutTemplate, ShieldCheck } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { AppShell, type ShellNavItem } from "@/components/AppShell";
+import { NotificationBell } from "@/components/notifications/NotificationBell";
 import { useAuth } from "@/context/AuthContext";
 import { InstitutionProfileProvider, useInstitutionProfile } from "@/context/InstitutionProfileContext";
+import { pendingCorrections, unreadNotifications } from "@/lib/liveCounts";
 
-const navigation: ShellNavItem[] = [
-  { label: "Overview", href: "/institution/dashboard", icon: LayoutDashboard },
-  { label: "Profile", href: "/institution/profile", icon: Building2 },
-  { label: "Templates", href: "/institution/templates", icon: LayoutTemplate },
-  { label: "Students", href: "/institution/students", icon: GraduationCap },
-  { label: "Certificates", href: "/institution/certificates", icon: Award },
-  { label: "Verification activity", href: "/institution/verifications", icon: ShieldCheck },
-  { label: "Reports", href: "/institution/reports", icon: ChartColumn },
-];
+function institutionNavigation(pending: number, unread: number): ShellNavItem[] {
+  return [
+    { label: "Overview", href: "/institution/dashboard", icon: LayoutDashboard },
+    { label: "Profile", href: "/institution/profile", icon: Building2 },
+    { label: "Templates", href: "/institution/templates", icon: LayoutTemplate },
+    { label: "Students", href: "/institution/students", icon: GraduationCap },
+    { label: "Certificates", href: "/institution/certificates", icon: Award },
+    { label: "Corrections", href: "/institution/corrections", icon: FilePenLine, badge: pending, badgeLabel: "waiting" },
+    { label: "Notifications", href: "/institution/notifications", icon: Bell, badge: unread, badgeLabel: "unread" },
+    { label: "Verification activity", href: "/institution/verifications", icon: ShieldCheck },
+    { label: "Reports", href: "/institution/reports", icon: ChartColumn },
+  ];
+}
 
 export default function InstitutionLayout({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -42,6 +48,9 @@ function InstitutionShell({ email, children }: { email: string; children: ReactN
   const { profile } = useInstitutionProfile();
   const pathname = usePathname();
   const router = useRouter();
+  // Polled while the workspace is open, visible and in use (every 2 minutes, and when the tab regains focus).
+  const pending = pendingCorrections.useCount();
+  const unread = unreadNotifications.useCount();
   // The template editor (/institution/templates/new and /institution/templates/<id>) needs the whole width:
   // it shows the sidebar as the icon rail and fills the window below its own top bar.
   const isEditorRoute = /^\/institution\/templates\/[^/]+$/.test(pathname);
@@ -58,10 +67,11 @@ function InstitutionShell({ email, children }: { email: string; children: ReactN
       email={email}
       forceRail={isEditorRoute}
       homeHref="/institution/dashboard"
-      items={navigation}
+      items={institutionNavigation(pending, unread)}
       mainClassName={isEditorRoute ? "min-w-0 flex-1 px-4 py-8 lg:p-4" : undefined}
       navigationLabel="Institution navigation"
       onLogout={handleLogout}
+      toolbar={(placement) => <NotificationBell placement={placement} role="institution" />}
       workspaceLabel="Institution workspace"
     >
       {children}

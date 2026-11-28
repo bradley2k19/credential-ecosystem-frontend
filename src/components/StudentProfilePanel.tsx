@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
-import { changePassword, getStudentProfile, type StudentProfile } from "@/lib/api";
+import Link from "next/link";
+import { useEffect, useId, useState, type FormEvent } from "react";
+import { changePassword, getStudentProfile, updateStudentPreferences, type StudentProfile } from "@/lib/api";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -66,7 +67,11 @@ export function StudentProfilePanel() {
       <section>
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-700">Account</p>
         <h1 className="mt-2 text-3xl font-semibold text-slate-950">Profile</h1>
-        <p className="mt-2 text-slate-600">These details are managed by your institution. Contact them if anything is wrong.</p>
+        <p className="mt-2 text-slate-600">
+          Your name, programme and student number are managed by your institution, because they are printed on your certificates.
+          If one of your certificates is wrong, open it and choose <span className="font-semibold">&ldquo;Request a correction&rdquo;</span> (see{" "}
+          <Link className="font-semibold text-teal-700 underline" href="/student/corrections">Corrections</Link>).
+        </p>
 
         {loadError && <p className="mt-6 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">{loadError}</p>}
         {isLoading ? (
@@ -83,6 +88,8 @@ export function StudentProfilePanel() {
         )}
       </section>
 
+      {profile && <NotificationPreference initial={profile.notifyOnVerification !== false} />}
+
       <section className="rounded-md border border-slate-200 p-5 sm:p-6">
         <h2 className="text-xl font-semibold text-slate-950">Change password</h2>
         <p className="mt-2 rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-900">If you were given a temporary password by your institution, change it now.</p>
@@ -97,6 +104,57 @@ export function StudentProfilePanel() {
         </form>
       </section>
     </div>
+  );
+}
+
+/** "Notify me when my certificates are verified": saved as soon as it is switched, with feedback. */
+function NotificationPreference({ initial }: { initial: boolean }) {
+  const labelId = useId();
+  const [enabled, setEnabled] = useState(initial);
+  const [isSaving, setIsSaving] = useState(false);
+  const [feedback, setFeedback] = useState<{ tone: "saved" | "error"; text: string } | null>(null);
+
+  async function toggle() {
+    const next = !enabled;
+    setEnabled(next);
+    setIsSaving(true);
+    setFeedback(null);
+    try {
+      const saved = await updateStudentPreferences({ notifyOnVerification: next });
+      setEnabled(saved.notifyOnVerification);
+      setFeedback({ tone: "saved", text: saved.notifyOnVerification ? "Saved. You will be notified when your certificates are verified." : "Saved. You will no longer be notified when your certificates are verified." });
+    } catch (saveError) {
+      setEnabled(!next);
+      setFeedback({ tone: "error", text: saveError instanceof Error ? `Not saved: ${saveError.message}` : "Not saved. Please try again." });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <section className="rounded-md border border-slate-200 p-5 sm:p-6">
+      <h2 className="text-xl font-semibold text-slate-950">Notifications</h2>
+      <div className="mt-4 flex items-center justify-between gap-4">
+        <span className="text-sm font-medium text-slate-800" id={labelId}>Notify me when my certificates are verified</span>
+        <button
+          aria-checked={enabled}
+          aria-labelledby={labelId}
+          className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:opacity-60 ${enabled ? "bg-teal-700" : "bg-slate-300"}`}
+          disabled={isSaving}
+          onClick={() => void toggle()}
+          role="switch"
+          type="button"
+        >
+          <span aria-hidden="true" className={`inline-block size-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`} />
+        </button>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">Notifications appear under the bell and on the Notifications page. Nothing is emailed.</p>
+      {feedback && (
+        <p className={`mt-3 rounded-md px-3 py-2 text-sm ${feedback.tone === "saved" ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-800"}`} role={feedback.tone === "saved" ? "status" : "alert"}>
+          {feedback.text}
+        </p>
+      )}
+    </section>
   );
 }
 

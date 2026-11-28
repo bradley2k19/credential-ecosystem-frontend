@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { CertificateExportFeedback, useCertificateExport } from "@/components/certificate/CertificateExport";
 import { ScaledCertificate } from "@/components/certificate/ScaledCertificate";
 import { CertificateStatusBadge, isConfirmedOnChain, OnChainBadge } from "@/components/StudentCertificateBadges";
+import { CertificateCorrectionSection } from "@/components/corrections/CertificateCorrectionSection";
 import { getStudentCertificate, type StudentCertificateDetail as StudentCertificateRecord } from "@/lib/api";
 import { getQrVerificationLink, getVerificationLink } from "@/lib/appUrl";
 import { renderDataFromCertificate } from "@/lib/certificateDesign";
@@ -135,6 +136,8 @@ export function StudentCertificateDetail({ certificateId }: { certificateId: str
         <Detail label="Graduation date" value={certificate.graduationDate ? formatCertificateDate(certificate.graduationDate) : "Not specified"} />
         <Detail label="Certificate ID" mono value={certificate.certificateUid} />
       </dl>
+
+      <CertificateCorrectionSection certificateId={certificate.id} status={certificate.status} />
 
       <section className="rounded-md border border-slate-200 p-5">
         <h2 className="text-xl font-semibold text-slate-950">Share and verify</h2>

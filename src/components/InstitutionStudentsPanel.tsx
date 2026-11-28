@@ -1,8 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, type FormEvent } from "react";
+import { StudentEditDialog } from "@/components/StudentEditDialog";
 import {
   createInstitutionStudent,
+  getInstitutionStudent,
   getInstitutionStudents,
   type StudentRecord,
 } from "@/lib/api";
@@ -18,7 +21,11 @@ const emptyForm = {
 
 type StudentFieldName = keyof typeof emptyForm;
 
-export function InstitutionStudentsPanel() {
+/**
+ * `editStudentId` opens the edit dialog for that student (from "Edit student details first" while correcting a
+ * certificate); `returnTo` is where to go back afterwards (a page of this workspace only).
+ */
+export function InstitutionStudentsPanel({ editStudentId, returnTo }: { editStudentId?: string; returnTo?: string } = {}) {
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -26,6 +33,24 @@ export function InstitutionStudentsPanel() {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
+  const [editing, setEditing] = useState<StudentRecord | null>(null);
+  const [savedName, setSavedName] = useState("");
+
+  // Opening straight into the edit dialog for one student (it may not be on the first page of the list).
+  useEffect(() => {
+    if (!editStudentId) return;
+    let active = true;
+    void getInstitutionStudent(editStudentId)
+      .then((student) => { if (active) setEditing(student); })
+      .catch((loadError: unknown) => { if (active) setError(loadError instanceof Error ? loadError.message : "That student could not be loaded."); });
+    return () => { active = false; };
+  }, [editStudentId]);
+
+  async function handleSaved(student: StudentRecord) {
+    setEditing(null);
+    setSavedName(student.fullName);
+    await refreshStudents();
+  }
 
   async function refreshStudents() {
     setError("");
@@ -41,7 +66,6 @@ export function InstitutionStudentsPanel() {
 
   useEffect(() => {
     // Load this authenticated list after the client can read the stored JWT.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refreshStudents();
   }, []);
 
@@ -122,6 +146,13 @@ export function InstitutionStudentsPanel() {
 
       {!isFormOpen && error && <p className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">{error}</p>}
 
+      {savedName && (
+        <div className="rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900" data-student-saved="" role="status">
+          <p>Saved the details of {savedName}. Certificates you issue from now on use them; certificates already issued keep theirs.</p>
+          {returnTo && <Link className="mt-1 inline-block font-semibold underline" href={returnTo}>Continue the correction</Link>}
+        </div>
+      )}
+
       {isLoading ? (
         <p className="text-sm text-slate-600">Loading students...</p>
       ) : students.length === 0 ? (
@@ -135,21 +166,33 @@ export function InstitutionStudentsPanel() {
                 <th className="px-4 py-3 font-semibold">Student number</th>
                 <th className="px-4 py-3 font-semibold">Program</th>
                 <th className="px-4 py-3 font-semibold">Enrollment year</th>
+                <th className="px-4 py-3 font-semibold"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 bg-white">
               {students.map((student) => (
-                <tr key={student.id}>
+                <tr data-student-row={student.id} key={student.id}>
                   <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">{student.fullName}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-700">{student.studentNumber}</td>
                   <td className="px-4 py-3 text-slate-700">{student.programName}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-700">{student.enrollmentYear}</td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      aria-label={`Edit ${student.fullName}`}
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      onClick={() => { setSavedName(""); setEditing(student); }}
+                      type="button"
+                    >
+                      Edit
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+      {editing && <StudentEditDialog onClose={() => setEditing(null)} onSaved={(student) => void handleSaved(student)} student={editing} />}
     </section>
   );
 }

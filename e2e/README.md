@@ -1,5 +1,20 @@
 # Browser tests
 
+## Notifications, corrections and student editing
+
+`notifications-corrections.spec.ts` checks the notification bell (its count; polling every 2 minutes, paused
+while the tab is hidden and after 10 minutes without input, with a check on focus; and its panel), both
+notification pages, the student's correction request dialog and status, the
+student's notification preference, the institution's approve and reject flow, the prefilled reissue form, the
+"Now revoke the original certificate" prompt, and the student edit dialog.
+
+Every API call is answered by a mock inside the browser, so no backend, database or wallet is needed. Start the
+frontend (`npm run dev`, or `npm run build` then `npm start`), then from this folder:
+
+```bash
+EDITOR_SWEEP_BASE_URL=http://localhost:3000 npm run test:notifications
+```
+
 ## Template editor sweep
 
 `template-editor-sweep.spec.ts` opens the template editor from a starter and changes every control in all nine

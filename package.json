@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:editor-sweep": "playwright test e2e/template-editor-sweep.spec.ts"
+    "test:editor-sweep": "playwright test e2e/template-editor-sweep.spec.ts",
+    "test:notifications": "playwright test e2e/notifications-corrections.spec.ts"
   },
   "dependencies": {
     "ethers": "^6.17.0",

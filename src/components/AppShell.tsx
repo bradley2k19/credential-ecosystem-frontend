@@ -12,6 +12,10 @@ export interface ShellNavItem {
   icon: LucideIcon;
   /** Other path prefixes under which this item also counts as the current page. */
   activeUnder?: string[];
+  /** A count shown next to the label (and on the icon in the rail); hidden when 0. */
+  badge?: number;
+  /** What the count is, for screen readers: "unread", "waiting". */
+  badgeLabel?: string;
 }
 
 export interface ShellBrand {
@@ -34,6 +38,8 @@ interface AppShellProps {
   mainClassName?: string;
   /** Classes for the container around the page content. */
   contentClassName?: string;
+  /** Tools such as the notification bell: drawn in the sidebar header, or in the top bar on small screens. */
+  toolbar?: (placement: "sidebar" | "topbar") => ReactNode;
   children: ReactNode;
 }
 
@@ -109,7 +115,7 @@ interface TooltipState {
  * (64 px), remembered per browser, and on small screens a top bar with a menu button that opens the full
  * sidebar as a drawer. Each role's layout supplies the navigation items, the brand and the account actions.
  */
-export function AppShell({ brand, workspaceLabel, homeHref, navigationLabel, items, email, onLogout, forceRail = false, mainClassName, contentClassName, children }: AppShellProps) {
+export function AppShell({ brand, workspaceLabel, homeHref, navigationLabel, items, email, onLogout, forceRail = false, mainClassName, contentClassName, toolbar, children }: AppShellProps) {
   const pathname = usePathname();
   const sidebarId = useId();
   const drawerId = useId();
@@ -182,6 +188,7 @@ export function AppShell({ brand, workspaceLabel, homeHref, navigationLabel, ite
           <BrandMark brand={brand} />
           <span className="truncate">{brand.name}</span>
         </Link>
+        {toolbar && <div className="ml-auto flex items-center">{toolbar("topbar")}</div>}
       </header>
 
       <dialog
@@ -227,6 +234,7 @@ export function AppShell({ brand, workspaceLabel, homeHref, navigationLabel, ite
             </button>
           )}
           rail={!expanded}
+          tools={toolbar?.("sidebar")}
           tooltipProps={expanded ? () => ({}) : tooltipProps}
         />
       </aside>
@@ -257,7 +265,7 @@ type TooltipHandlers = (label: string) => Partial<{
 }>;
 
 /** The sidebar's contents, drawn either expanded (labels) or as the icon rail (icons with tooltips). */
-function SidebarPanel({ brand, workspaceLabel, homeHref, navigationLabel, items, pathname, email, onLogout, rail, headerAction, onNavigate, tooltipProps }: {
+function SidebarPanel({ brand, workspaceLabel, homeHref, navigationLabel, items, pathname, email, onLogout, rail, headerAction, tools, onNavigate, tooltipProps }: {
   brand: ShellBrand;
   workspaceLabel: string;
   homeHref: string;
@@ -268,6 +276,7 @@ function SidebarPanel({ brand, workspaceLabel, homeHref, navigationLabel, items,
   onLogout: () => void;
   rail: boolean;
   headerAction: ReactNode;
+  tools?: ReactNode;
   onNavigate?: () => void;
   tooltipProps: TooltipHandlers;
 }) {
@@ -279,6 +288,7 @@ function SidebarPanel({ brand, workspaceLabel, homeHref, navigationLabel, items,
             <BrandMark brand={brand} />
           </Link>
           {headerAction}
+          {tools}
         </div>
       ) : (
         <div className="flex items-start justify-between gap-2">
@@ -290,7 +300,10 @@ function SidebarPanel({ brand, workspaceLabel, homeHref, navigationLabel, items,
             </Link>
             <p className="mt-1 truncate text-sm text-slate-500">{workspaceLabel}</p>
           </div>
-          {headerAction}
+          <div className="flex shrink-0 items-center">
+            {tools}
+            {headerAction}
+          </div>
         </div>
       )}
 
@@ -299,18 +312,32 @@ function SidebarPanel({ brand, workspaceLabel, homeHref, navigationLabel, items,
           {items.map((item) => {
             const active = isActive(item, pathname);
             const Icon = item.icon;
+            const badge = item.badge && item.badge > 0 ? (item.badge > 99 ? "99+" : String(item.badge)) : "";
+            const badgeText = badge ? `, ${badge} ${item.badgeLabel ?? "new"}` : "";
             return (
               <li key={item.href}>
                 <Link
                   aria-current={active ? "page" : undefined}
-                  aria-label={rail ? item.label : undefined}
+                  aria-label={rail ? `${item.label}${badgeText}` : undefined}
                   className={`flex items-center gap-3 rounded-md text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-teal-600 ${rail ? "justify-center p-2.5" : "px-3 py-2"} ${active ? "bg-teal-50 text-teal-800" : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"}`}
+                  data-nav-item={item.href}
                   href={item.href}
                   onClick={onNavigate}
-                  {...tooltipProps(item.label)}
+                  {...tooltipProps(`${item.label}${badgeText}`)}
                 >
-                  <Icon aria-hidden="true" className="size-5 shrink-0" />
+                  <span className="relative shrink-0">
+                    <Icon aria-hidden="true" className="size-5" />
+                    {/* In the rail the count sits on the icon, so it shows even without the label. */}
+                    {rail && badge && (
+                      <span aria-hidden="true" className="absolute -right-2 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white" data-nav-badge="">{badge}</span>
+                    )}
+                  </span>
                   {!rail && <span className="truncate">{item.label}</span>}
+                  {!rail && badge && (
+                    <span className="ml-auto rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white" data-nav-badge="">
+                      {badge}<span className="sr-only"> {item.badgeLabel ?? "new"}</span>
+                    </span>
+                  )}
                 </Link>
               </li>
             );

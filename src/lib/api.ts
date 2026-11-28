@@ -148,7 +148,16 @@ export interface StudentRecord {
   studentNumber: string;
   programName: string;
   enrollmentYear: number;
+  dateOfBirth?: string | null;
   user: { email: string };
+}
+
+/** The student details an institution can edit. The student number cannot change. */
+export interface UpdateStudentData {
+  fullName?: string;
+  programName?: string;
+  enrollmentYear?: number;
+  dateOfBirth?: string | null;
 }
 
 export interface CreateStudentResponse {
@@ -173,6 +182,8 @@ export interface CreateCertificateData {
   graduationDate?: string;
   /** One of the institution's active templates. Left out, the backend uses the default template, or Classic. */
   templateId?: string;
+  /** Issuing a replacement for this approved correction request (same student as the original). */
+  correctionRequestId?: string;
 }
 
 export interface CertificateRecord {
@@ -326,6 +337,18 @@ export function getInstitutionStudents(page = 1, limit = 20) {
   return request<StudentListResponse>(`/api/institutions/students?page=${page}&limit=${limit}`, { method: "GET" }, true);
 }
 
+export function getInstitutionStudent(studentId: string) {
+  return request<StudentRecord>(`/api/institutions/students/${encodeURIComponent(studentId)}`, { method: "GET" }, true);
+}
+
+/** Edits a student's record. Only future certificates use the new details; issued ones keep theirs. */
+export function updateInstitutionStudent(studentId: string, data: UpdateStudentData) {
+  return request<StudentRecord>(`/api/institutions/students/${encodeURIComponent(studentId)}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  }, true);
+}
+
 export function createInstitutionCertificate(data: CreateCertificateData) {
   return request<CertificateRecord>("/api/institutions/certificates", {
     method: "POST",
@@ -333,8 +356,9 @@ export function createInstitutionCertificate(data: CreateCertificateData) {
   }, true);
 }
 
-export function getInstitutionCertificates() {
-  return request<CertificateListResponse>("/api/institutions/certificates?limit=100", { method: "GET" }, true);
+export function getInstitutionCertificates({ studentId }: { studentId?: string } = {}) {
+  const query = new URLSearchParams({ limit: "100", ...(studentId ? { studentId } : {}) });
+  return request<CertificateListResponse>(`/api/institutions/certificates?${query}`, { method: "GET" }, true);
 }
 
 /** The institution's single-certificate response. It never includes the certificate hash. */
@@ -349,6 +373,8 @@ export interface InstitutionCertificateDetail {
   status: "ACTIVE" | "REVOKED" | string;
   revokedReason?: string | null;
   student: { fullName: string; studentNumber: string };
+  studentId?: string;
+  templateId?: string | null;
   institutionName: string;
   templateName: string | null;
   renderSnapshot: RenderSnapshot;
@@ -405,6 +431,118 @@ export interface StudentProfile {
   enrollmentYear: number;
   email: string;
   institutionName: string;
+  /** Whether the student is notified when one of their certificates is verified. */
+  notifyOnVerification?: boolean;
+}
+
+export function updateStudentPreferences(preferences: { notifyOnVerification: boolean }) {
+  return request<{ notifyOnVerification: boolean }>("/api/students/me/preferences", {
+    method: "PATCH",
+    body: JSON.stringify(preferences),
+  }, true);
+}
+
+// ----- Notifications (in-app only) -----
+
+export type NotificationType = "CERT_ISSUED" | "CERT_REVOKED" | "VERIFICATION_REQUEST" | "CORRECTION_REQUEST" | "CORRECTION_RESOLVED";
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType | string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+  relatedCertificateId: string | null;
+  relatedCorrectionRequestId: string | null;
+}
+
+export interface NotificationListResponse {
+  notifications: AppNotification[];
+  unreadCount: number;
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+export function getNotifications({ page = 1, limit = 20, unreadOnly = false }: { page?: number; limit?: number; unreadOnly?: boolean } = {}) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit), ...(unreadOnly ? { unread: "true" } : {}) });
+  return request<NotificationListResponse>(`/api/notifications?${query}`, { method: "GET" }, true);
+}
+
+export function getUnreadNotificationCount() {
+  return request<{ unreadCount: number }>("/api/notifications/unread-count", { method: "GET" }, true);
+}
+
+export function markNotificationRead(notificationId: string) {
+  return request<{ id: string; isRead: boolean }>(`/api/notifications/${encodeURIComponent(notificationId)}/read`, { method: "PATCH" }, true);
+}
+
+export function markAllNotificationsRead() {
+  return request<{ updated: number }>("/api/notifications/read-all", { method: "POST" }, true);
+}
+
+// ----- Correction requests -----
+
+/**
+ * Where a correction request stands: waiting for the institution, rejected, approved but not yet reissued, a
+ * replacement issued while the original is still active, or completed (replacement issued, original revoked).
+ */
+export type CorrectionStage = "pending" | "rejected" | "approved_awaiting_reissue" | "replacement_issued" | "completed";
+
+export interface CorrectionRequest {
+  id: string;
+  requestDetails: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  stage: CorrectionStage;
+  resolutionNote: string | null;
+  requestedAt: string;
+  resolvedAt: string | null;
+  certificate: { id: string; certificateUid: string; certificateType: string; programName: string; status: "ACTIVE" | "REVOKED" | string };
+  replacement: { id: string; certificateUid: string; certificateType: string } | null;
+}
+
+/** The institution's view: the same, plus the student as printed on the original certificate. */
+export interface InstitutionCorrectionRequest extends CorrectionRequest {
+  student: { fullName: string; studentNumber: string };
+}
+
+export const CORRECTION_DETAILS_MIN = 20;
+export const CORRECTION_DETAILS_MAX = 1000;
+
+export function requestCertificateCorrection(certificateId: string, requestDetails: string) {
+  return request<CorrectionRequest>(`/api/students/me/certificates/${encodeURIComponent(certificateId)}/correction-requests`, {
+    method: "POST",
+    body: JSON.stringify({ requestDetails }),
+  }, true);
+}
+
+export function getStudentCorrectionRequests() {
+  return request<{ correctionRequests: CorrectionRequest[] }>("/api/students/me/correction-requests", { method: "GET" }, true);
+}
+
+export function getInstitutionCorrectionRequests({ status = "", page = 1, limit = 20 }: { status?: "" | "pending" | "approved" | "rejected"; page?: number; limit?: number } = {}) {
+  const query = new URLSearchParams({ page: String(page), limit: String(limit), ...(status ? { status } : {}) });
+  return request<{ correctionRequests: InstitutionCorrectionRequest[]; pendingCount: number; pagination: { page: number; limit: number; total: number; totalPages: number } }>(
+    `/api/institutions/correction-requests?${query}`,
+    { method: "GET" },
+    true,
+  );
+}
+
+export function getInstitutionCorrectionRequest(requestId: string) {
+  return request<InstitutionCorrectionRequest>(`/api/institutions/correction-requests/${encodeURIComponent(requestId)}`, { method: "GET" }, true);
+}
+
+export function approveCorrectionRequest(requestId: string, note?: string) {
+  return request<InstitutionCorrectionRequest>(`/api/institutions/correction-requests/${encodeURIComponent(requestId)}/approve`, {
+    method: "POST",
+    body: JSON.stringify(note ? { note } : {}),
+  }, true);
+}
+
+export function rejectCorrectionRequest(requestId: string, note: string) {
+  return request<InstitutionCorrectionRequest>(`/api/institutions/correction-requests/${encodeURIComponent(requestId)}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  }, true);
 }
 
 export interface StudentCertificate {
